@@ -176,6 +176,16 @@ document.querySelectorAll(".tabs button").forEach((b) => {
 const DEFAULT_MODELS = {};
 let KEYS_PRESENT = {};
 let SAVED_MODELS = {};
+// A short known-good list per provider so the dropdown is never empty before a
+// live refresh. The ⟳ button pulls each provider's full, current catalogue.
+const CURATED = {
+  anthropic: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  openrouter: ["anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.8", "openai/gpt-4o", "google/gemini-2.5-flash"],
+  openai: ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+  "ollama-cloud": ["gpt-oss:120b", "qwen3-coder:480b", "deepseek-v3.1:671b"],
+  ollama: [],
+};
+const MODEL_CACHE = {}; // provider -> live-fetched list
 
 async function loadConfig() {
   const c = await api("/api/config");
@@ -190,7 +200,6 @@ function reflectProvider() {
   const p = $("cfgProvider").value;
   const isLocal = p === "ollama";
   const hasKey = !!KEYS_PRESENT[p];
-  $("cfgModel").value = SAVED_MODELS[p] || "";
   $("cfgKey").value = "";
   $("cfgKey").disabled = isLocal;
   $("cfgKey").parentElement.style.opacity = isLocal ? ".45" : "1";
@@ -198,14 +207,51 @@ function reflectProvider() {
     (hasKey ? "•••••• (saved for " + p + " — blank keeps it)" : "paste your " + p + " key");
   $("keyState").textContent = isLocal ? "" : (hasKey ? "✓ saved" : "not set");
   $("keyState").className = "setup-note" + (isLocal ? "" : (hasKey ? " ok" : " bad"));
+  populateModels(MODEL_CACHE[p] || CURATED[p] || [], SAVED_MODELS[p] || "");
   updateModelHint();
 }
+
+function populateModels(list, selected) {
+  const sel = $("cfgModel");
+  const items = list.slice();
+  // keep whatever is already saved/selected even if it's not in the list
+  if (selected && !items.includes(selected)) items.unshift(selected);
+  sel.innerHTML = "";
+  if (!items.length) {
+    const o = document.createElement("option");
+    o.value = ""; o.textContent = "(default) — tap ⟳ to load models";
+    sel.appendChild(o);
+  }
+  items.forEach((m) => {
+    const o = document.createElement("option");
+    o.value = m; o.textContent = m;
+    if (m === selected) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
 function updateModelHint() {
   const p = $("cfgProvider").value;
   const d = p === "ollama" ? "your local model" : (DEFAULT_MODELS[p] || "");
   $("modelHint").textContent = d ? "default: " + d : "";
 }
 $("cfgProvider").onchange = reflectProvider;
+
+$("refreshModels").onclick = async () => {
+  const p = $("cfgProvider").value;
+  const icon = $("refreshModels"); icon.classList.add("spin");
+  const note = $("modelsNote"); note.textContent = "fetching models…"; note.className = "setup-note";
+  const r = await api("/api/models?provider=" + encodeURIComponent(p));
+  icon.classList.remove("spin");
+  if (r.ok && r.models.length) {
+    MODEL_CACHE[p] = r.models;
+    populateModels(r.models, SAVED_MODELS[p] || $("cfgModel").value);
+    note.textContent = r.models.length + " models"; note.className = "setup-note ok";
+  } else {
+    note.textContent = r.error ? "✗ " + r.error : "no models returned";
+    note.className = "setup-note bad";
+  }
+};
 
 $("cfgSave").onclick = async () => {
   const body = { provider: $("cfgProvider").value, model: $("cfgModel").value.trim() };
@@ -243,6 +289,8 @@ $("detectOllama").onclick = async () => {
   state.className = "setup-note ok";
   state.textContent = "Ollama is running at " + r.host + " — tap a model to use it:";
   ollamaModels = r.models;
+  MODEL_CACHE.ollama = r.models;               // also feed the dropdown
+  if ($("cfgProvider").value === "ollama") populateModels(r.models, $("cfgModel").value);
   renderOllamaModels();
 };
 

@@ -37,6 +37,7 @@ import time
 import traceback
 import urllib.request
 import urllib.error
+import urllib.parse
 import importlib.util
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -162,6 +163,35 @@ def list_ollama_models():
         return [m["name"] for m in data.get("models", [])]
     except Exception:
         return []
+
+
+def fetch_models(provider):
+    """The live catalogue for a provider (its /models endpoint), sorted."""
+    if provider == "ollama":
+        return list_ollama_models()
+    base = DEFAULT_BASE.get(provider)
+    if not base:
+        raise LLMError(f"unknown provider '{provider}'")
+    key = key_for(provider)
+    headers = {}
+    if provider == "anthropic":
+        if not key:
+            raise LLMError("add your Anthropic key first")
+        headers["x-api-key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    elif key:
+        headers["authorization"] = f"Bearer {key}"  # OpenRouter's list is public; others need a key
+    req = urllib.request.Request(base.rstrip("/") + "/models", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise LLMError(f"{e.code}: {e.read().decode(errors='replace')[:200]}")
+    except urllib.error.URLError as e:
+        raise LLMError(f"cannot reach {provider}: {e.reason}")
+    arr = data.get("data") or data.get("models") or []
+    ids = [m.get("id") or m.get("name") for m in arr if isinstance(m, dict)]
+    return sorted(i for i in ids if i)
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +482,70 @@ def tool_run_shell(args):
         return {"ok": False, "error": str(e)}
 
 
+# ---- computer use (control the actual machine) ---------------------------
+
+def _is_mac():
+    return sys.platform == "darwin"
+
+
+def tool_applescript(args):
+    """Run AppleScript — the master key to macOS: open/close/arrange apps,
+    click buttons and menus, type text, read the screen's UI, etc."""
+    if not _is_mac():
+        return {"ok": False, "error": "AppleScript is macOS-only"}
+    script = args.get("script", "")
+    if not script:
+        return {"ok": False, "error": "no script"}
+    try:
+        proc = subprocess.run(["osascript", "-e", script], capture_output=True,
+                              text=True, timeout=int(args.get("timeout", 30)))
+        out = (proc.stdout + proc.stderr).strip()
+        return {"ok": proc.returncode == 0, "result": out[:6000]}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "script timed out"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def tool_open_app(args):
+    name = args.get("name", "")
+    if not name:
+        return {"ok": False, "error": "no app name"}
+    target = ["-a", name]
+    if args.get("url"):
+        target = [args["url"]]
+    try:
+        subprocess.run(["open"] + target, capture_output=True, text=True, timeout=15)
+        return {"ok": True, "result": f"opened {args.get('url') or name}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def tool_type_text(args):
+    """Type text into the frontmost app (via System Events keystroke)."""
+    if not _is_mac():
+        return {"ok": False, "error": "typing is macOS-only"}
+    text = args.get("text", "")
+    safe = text.replace("\\", "\\\\").replace('"', '\\"')
+    return tool_applescript({"script": f'tell application "System Events" to keystroke "{safe}"'})
+
+
+def tool_screenshot(args):
+    """Capture the screen to a PNG under memory/. A vision-capable model can
+    then read it with read_file to actually see the screen."""
+    if not _is_mac():
+        return {"ok": False, "error": "screenshot is macOS-only"}
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+    path = os.path.join(MEMORY_DIR, "screen.png")
+    try:
+        subprocess.run(["screencapture", "-x", path], capture_output=True, timeout=15)
+        if os.path.exists(path):
+            return {"ok": True, "result": {"path": path, "bytes": os.path.getsize(path)}}
+        return {"ok": False, "error": "capture produced no file (grant Screen Recording permission)"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def tool_read_self(args):
     which = args.get("file", "scarb.py")
     allowed = {"scarb.py", "identity.md", "soul.md"}
@@ -474,6 +568,11 @@ CORE_TOOLS = {
     "write_file": tool_write_file,
     "run_shell": tool_run_shell,
     "read_self": tool_read_self,
+    # computer use
+    "applescript": tool_applescript,
+    "open_app": tool_open_app,
+    "type_text": tool_type_text,
+    "screenshot": tool_screenshot,
 }
 
 
@@ -508,27 +607,31 @@ def read_doc(name, fallback=""):
 
 ACTION_RULES = """
 HOW YOU ACT
-You work in steps. To use a tool, reply with EXACTLY one fenced json block and nothing else:
-```json
+You work in steps. To use a tool, output a single JSON object as the LAST thing in your reply:
 {"tool": "<tool or skill name>", "args": { ... }}
-```
-I run it and reply with the result, then you continue. When the task is finished, reply in plain words with NO json block — that is your final answer to the human.
+(a ```json fenced block is fine too). Output the action and STOP — do not describe the result or say a task is done until I have actually run the tool and given you the result. NEVER invent a tool result. When the task is truly finished, reply in plain words with NO json object.
 
 CORE TOOLS
 - list_skills {} — see what you can already do.
-- create_skill {"name","description","code"} — write a NEW skill when no skill fits the task. code is a full Python module (standard library only) defining run(args) that returns a value or {"ok":bool,"result"/"error":...}. It is validated and hot-loaded immediately; if it errors you get the message to fix it. Reuse skills forever — never solve the same thing twice.
-- update_skill {"name","description","code"} — rewrite a skill (e.g. to fix or improve it).
-- read_skill {"name"} / delete_skill {"name"} / list_skills {}
+- create_skill {"name","description","code"} — write a NEW skill when no skill fits. code is a full Python module (standard library only) defining run(args) that returns a value or {"ok":bool,"result"/"error":...}. Validated and hot-loaded immediately; if it errors you get the message to fix it. Reuse skills forever.
+- update_skill / read_skill / delete_skill {"name"}
 - read_file {"path"} / write_file {"path","content"} — paths are relative to SCARB's folder.
-- run_shell {"command","timeout"} — run a shell command on this machine.
-- read_self {"file"} — read your own scarb.py, identity.md, or soul.md, to improve yourself.
+- run_shell {"command","timeout"} — run any shell command on this machine.
+- read_self {"file"} — read your own scarb.py / identity.md / soul.md, to improve yourself.
+
+COMPUTER USE (you control this Mac)
+- applescript {"script"} — run AppleScript: open/quit/arrange apps, click buttons & menu items, type, read on-screen UI via System Events. This is your main way to drive the desktop.
+- open_app {"name"} or {"url"} — launch an app or open a URL/file.
+- type_text {"text"} — type into the frontmost app.
+- screenshot {} — capture the screen to memory/screen.png (a vision model can then read_file it).
+(First use may need macOS Accessibility / Screen-Recording permission for the app running SCARB.)
+
 Plus every skill below is callable directly by its name as a tool.
 
 RULES
-- When you lack a capability, CREATE A SKILL for it, then use it. That is how you grow.
-- Prefer an existing skill over ad-hoc shell. Keep skills small and general.
-- Do the task fully; verify results before declaring success.
-- Ask before anything destructive, irreversible, or far-reaching (deleting data, sending/publishing, spending). Being able to do a thing is not permission to.
+- When you lack a capability, CREATE A SKILL for it, then use it. That is how you grow — don't just describe the skill, emit the create_skill action.
+- One action per step. Do the task fully; verify before declaring success.
+- Ask before anything destructive, irreversible, or far-reaching (deleting data, sending/publishing, spending, quitting apps with unsaved work). Being able to do a thing is not permission to.
 - Be honest: if something failed, say so and show the output.
 """
 
@@ -546,16 +649,55 @@ def build_system():
 ACTION_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
+def _try_object(text, start):
+    """Read a brace-balanced JSON object starting at text[start] ('{'),
+    respecting string literals. Returns (obj_or_None, index_after)."""
+    depth, instr, esc = 0, False, False
+    for j in range(start, len(text)):
+        c = text[j]
+        if instr:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                instr = False
+        else:
+            if c == '"':
+                instr = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    frag = text[start:j + 1]
+                    try:
+                        return json.loads(frag), j + 1
+                    except Exception:
+                        return None, j + 1
+    return None, len(text)
+
+
 def extract_action(text):
-    blocks = ACTION_RE.findall(text)
-    for raw in reversed(blocks):
+    """Find a tool action whether it's in a ```json``` fence OR bare inline
+    (smaller / local models often skip the fence). Returns the last valid one."""
+    for raw in reversed(ACTION_RE.findall(text)):
         try:
             obj = json.loads(raw)
             if isinstance(obj, dict) and "tool" in obj:
                 return obj
         except Exception:
             continue
-    return None
+    found, i, n = None, 0, len(text)
+    while i < n:
+        if text[i] == "{":
+            obj, end = _try_object(text, i)
+            if isinstance(obj, dict) and "tool" in obj:
+                found = obj
+                i = end
+                continue
+        i += 1
+    return found
 
 
 HISTORY = []  # conversation across turns: {"role","content"}
@@ -704,6 +846,16 @@ class Handler(BaseHTTPRequestHandler):
             models = list_ollama_models()
             return self._send(200, {"running": bool(models), "models": models,
                                     "host": ollama_host()})
+        if path == "/api/models":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            provider = (qs.get("provider", [CONFIG["provider"]])[0])
+            try:
+                return self._send(200, {"ok": True, "provider": provider,
+                                        "models": fetch_models(provider)})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": str(e)[:300]})
         if path == "/events":
             return self._serve_events()
         return self._send(404, {"error": "not found"})

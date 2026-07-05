@@ -102,7 +102,11 @@ header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:
   border-radius:9px;color:var(--ink);font:13px var(--sans);padding:10px 11px;outline:none}
 #panel-setup input{font-family:var(--mono)}
 #panel-setup select:focus,#panel-setup input:focus{border-color:var(--gold-dim)}
-.setup-row{display:flex;gap:8px;margin-top:12px}
+.setup-row{display:flex;gap:8px;margin-top:12px;align-items:center}
+.setup-row select{flex:1}
+.btn-icon{padding:10px 13px;font-size:15px;line-height:1}
+#refreshModels.spin{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .btn-primary{background:linear-gradient(180deg,var(--gold),var(--gold-dim));color:#20180a;border:none;
   border-radius:9px;padding:10px 16px;font-weight:800;font-size:13px}
 .btn-primary:disabled{opacity:.5}
