@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SCARB</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%AA%B2%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+
+<div class="gate" id="gate" hidden>
+  <div class="box">
+    <div style="font-size:34px">🪲</div>
+    <div style="letter-spacing:.14em;font-weight:800;margin-top:8px">SCARB</div>
+    <input id="tokenInput" type="password" placeholder="access token" autocomplete="off">
+    <button id="tokenGo">Enter</button>
+  </div>
+</div>
+
+<div class="mobtabs">
+  <button data-mob="chat" class="active">Chat</button>
+  <button data-mob="skills">Skills</button>
+</div>
+
+<div class="app" id="app">
+  <div class="main">
+    <header>
+      <svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
+        <ellipse cx="24" cy="27" rx="12" ry="15" fill="none" stroke="#e8c274" stroke-width="2.4"/>
+        <circle cx="24" cy="10" r="4.5" fill="none" stroke="#e8c274" stroke-width="2.4"/>
+        <line x1="24" y1="14" x2="24" y2="42" stroke="#e8c274" stroke-width="2.4"/>
+        <path d="M12 20 L2 14 M12 27 L1 27 M12 34 L2 40" stroke="#a8863f" stroke-width="2.2" fill="none"/>
+        <path d="M36 20 L46 14 M36 27 L47 27 M36 34 L46 40" stroke="#a8863f" stroke-width="2.2" fill="none"/>
+      </svg>
+      <div>
+        <div class="title"><b>SCARB</b></div>
+        <div class="subtitle" id="subtitle">self-improving assistant</div>
+      </div>
+      <div class="head-right">
+        <span class="badge" id="statusBadge"><span class="dot"></span><span id="statusText">idle</span></span>
+      </div>
+    </header>
+
+    <div class="stream" id="stream">
+      <div class="empty" id="empty">
+        <div style="font-size:40px">🪲</div>
+        <h2>SCARB is awake</h2>
+        <p>Give me a task. If I can't do it yet, I'll build a skill for it — watch the panel on the right fill in as I grow.</p>
+        <div class="chips" id="chips">
+          <button class="chip">What can you do right now?</button>
+          <button class="chip">Make a skill that tells me the current time</button>
+          <button class="chip">Calculate the 30th Fibonacci number</button>
+          <button class="chip">Build a skill to check if a website is up</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <label class="toggle" title="Run this turn on the local model"><input type="checkbox" id="localToggle">local</label>
+      <textarea id="input" rows="1" placeholder="Ask SCARB to do something…"></textarea>
+      <button class="send" id="send">➤</button>
+    </div>
+  </div>
+
+  <aside class="side">
+    <div class="tabs">
+      <button data-tab="skills" class="active">Skills</button>
+      <button data-tab="identity">Identity</button>
+      <button data-tab="soul">Soul</button>
+    </div>
+    <div class="panel" id="panel-skills">
+      <div class="count" id="skillCount">— skills</div>
+      <div id="skillList"></div>
+    </div>
+    <div class="panel hidden" id="panel-identity">
+      <textarea class="doc-edit" id="identityEdit" spellcheck="false"></textarea>
+      <button class="doc-save" data-doc="identity.md">Save identity</button>
+    </div>
+    <div class="panel hidden" id="panel-soul">
+      <textarea class="doc-edit" id="soulEdit" spellcheck="false"></textarea>
+      <button class="doc-save" data-doc="soul.md">Save soul</button>
+    </div>
+  </aside>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,727 @@
+#!/usr/bin/env python3
+"""
+SCARB — a self-improving assistant.
+
+The scarab rolls its world forward and is reborn from it. SCARB does tasks, and
+when it meets one it can't do, it writes a new *skill* to do it, tests it, keeps
+it, and gets a little more capable. It is shaped by two files it reads on every
+turn — identity.md (what it does) and soul.md (who it is) — and it can read and
+improve its own code and skills.
+
+One file, Python standard library only. Runs a cloud model (Anthropic or any
+OpenAI-compatible endpoint) and/or a local one (Ollama). Serves a live web UI
+— chat plus a skills panel that updates in real time as SCARB builds itself —
+that works on desktop and phone over your Tailscale network.
+
+    python3 scarb.py            # then open the printed URL
+
+Config via environment (all optional; see README):
+    SCARB_PROVIDER   anthropic | openai | openrouter | ollama   (default: ollama)
+    SCARB_API_KEY    key for the cloud provider
+    SCARB_MODEL      model id
+    SCARB_BASE_URL   override the API base (e.g. a local Ollama or a proxy)
+    SCARB_LOCAL_MODEL / SCARB_LOCAL_BASE_URL   a local fallback model (Ollama)
+    SCARB_TOKEN      shared secret required from clients (set this on Tailscale!)
+    SCARB_PORT       default 8787
+    SCARB_HOST       default 0.0.0.0 (reachable over Tailscale)
+"""
+from __future__ import annotations
+
+import json
+import os
+import queue
+import re
+import sys
+import threading
+import time
+import traceback
+import urllib.request
+import urllib.error
+import importlib.util
+import subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SKILLS_DIR = os.path.join(HERE, "skills")
+WEB_DIR = os.path.join(HERE, "web")
+MEMORY_DIR = os.path.join(HERE, "memory")
+VERSION = "0.1"
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+def env(name, default=""):
+    return os.environ.get(name, default)
+
+CONFIG = {
+    "provider": env("SCARB_PROVIDER", "ollama"),
+    "api_key": env("SCARB_API_KEY", ""),
+    "model": env("SCARB_MODEL", ""),
+    "base_url": env("SCARB_BASE_URL", ""),
+    "local_model": env("SCARB_LOCAL_MODEL", "llama3.1"),
+    "local_base_url": env("SCARB_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1"),
+    "token": env("SCARB_TOKEN", ""),
+    "port": int(env("SCARB_PORT", "8787")),
+    "host": env("SCARB_HOST", "0.0.0.0"),
+}
+
+DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-6",
+    "openai": "gpt-4o",
+    "openrouter": "anthropic/claude-sonnet-4.6",
+    "ollama": CONFIG["local_model"],
+}
+
+DEFAULT_BASE = {
+    "anthropic": "https://api.anthropic.com/v1",
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "ollama": CONFIG["local_base_url"],
+}
+
+
+def provider_for(kind):
+    """Resolve a (provider, model, base_url, api_key) tuple for 'cloud' or 'local'."""
+    if kind == "local":
+        return ("ollama", CONFIG["local_model"], CONFIG["local_base_url"], "")
+    p = CONFIG["provider"]
+    model = CONFIG["model"] or DEFAULT_MODELS.get(p, "")
+    base = CONFIG["base_url"] or DEFAULT_BASE.get(p, "")
+    return (p, model, base, CONFIG["api_key"])
+
+
+# ---------------------------------------------------------------------------
+# Event bus — pushes live updates (steps, skill changes) to the web UI over SSE
+# ---------------------------------------------------------------------------
+
+class EventBus:
+    def __init__(self):
+        self.clients = []
+        self.lock = threading.Lock()
+        self.log = []  # recent events, so a fresh page can catch up
+
+    def subscribe(self):
+        q = queue.Queue()
+        with self.lock:
+            self.clients.append(q)
+        return q
+
+    def unsubscribe(self, q):
+        with self.lock:
+            if q in self.clients:
+                self.clients.remove(q)
+
+    def emit(self, kind, **data):
+        event = {"kind": kind, "t": time.time(), **data}
+        with self.lock:
+            self.log = (self.log + [event])[-200:]
+            targets = list(self.clients)
+        for q in targets:
+            try:
+                q.put_nowait(event)
+            except Exception:
+                pass
+        return event
+
+BUS = EventBus()
+
+
+# ---------------------------------------------------------------------------
+# LLM client — Anthropic, OpenAI-compatible (OpenRouter/…), and Ollama (local)
+# ---------------------------------------------------------------------------
+
+class LLMError(Exception):
+    pass
+
+
+def llm_chat(system, messages, kind="cloud", max_tokens=2048):
+    """messages: list of {"role": "user"|"assistant", "content": str}. Returns text."""
+    provider, model, base, key = provider_for(kind)
+    if not base:
+        raise LLMError(f"no base URL for provider '{provider}'")
+    if provider == "anthropic":
+        return _anthropic(system, messages, model, base, key, max_tokens)
+    return _openai_compatible(system, messages, model, base, key, max_tokens)
+
+
+def _http_json(url, payload, headers, timeout=180):
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        raise LLMError(f"{e.code} {e.reason}: {detail[:400]}")
+    except urllib.error.URLError as e:
+        raise LLMError(f"cannot reach {url}: {e.reason}")
+
+
+def _anthropic(system, messages, model, base, key, max_tokens):
+    if not key:
+        raise LLMError("SCARB_API_KEY is required for Anthropic")
+    payload = {"model": model, "max_tokens": max_tokens, "system": system,
+               "messages": messages}
+    headers = {"content-type": "application/json", "x-api-key": key,
+               "anthropic-version": "2023-06-01"}
+    data = _http_json(base.rstrip("/") + "/messages", payload, headers)
+    parts = data.get("content", [])
+    text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+    if not text:
+        raise LLMError("empty response from Anthropic")
+    return text
+
+
+def _openai_compatible(system, messages, model, base, key, max_tokens):
+    msgs = [{"role": "system", "content": system}] + messages
+    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens,
+               "stream": False}
+    headers = {"content-type": "application/json"}
+    if key:
+        headers["authorization"] = f"Bearer {key}"
+    data = _http_json(base.rstrip("/") + "/chat/completions", payload, headers)
+    if "error" in data:
+        raise LLMError(str(data["error"]))
+    choices = data.get("choices", [])
+    if not choices:
+        raise LLMError("no choices returned")
+    msg = choices[0].get("message", {})
+    text = msg.get("content")
+    if isinstance(text, list):
+        text = "".join(p.get("text", "") for p in text)
+    if not text:
+        # some reasoning models put text under reasoning fields
+        text = msg.get("reasoning_content") or msg.get("reasoning") or ""
+    if not text:
+        raise LLMError("empty response")
+    return text
+
+
+def strip_thinking(text):
+    while "<think>" in text and "</think>" in text:
+        a = text.index("<think>")
+        b = text.index("</think>") + len("</think>")
+        text = text[:a] + text[b:]
+    return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Skills — SCARB's growable set of abilities. Each is skills/<name>.py with a
+# `# name:` / `# description:` header and a run(args) -> value function.
+# ---------------------------------------------------------------------------
+
+SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+
+
+class Skill:
+    def __init__(self, name, description, path, run):
+        self.name = name
+        self.description = description
+        self.path = path
+        self.run = run
+
+    def to_dict(self):
+        return {"name": self.name, "description": self.description,
+                "source": os.path.basename(self.path)}
+
+
+class Skills:
+    def __init__(self, directory):
+        self.dir = directory
+        self.skills = {}
+        os.makedirs(directory, exist_ok=True)
+        self.reload_all()
+
+    def reload_all(self):
+        self.skills = {}
+        for fn in sorted(os.listdir(self.dir)):
+            if fn.endswith(".py") and not fn.startswith("_"):
+                try:
+                    self._load_file(os.path.join(self.dir, fn))
+                except Exception as e:
+                    BUS.emit("log", text=f"skill {fn} failed to load: {e}")
+
+    def _load_file(self, path):
+        with open(path) as f:
+            src = f.read()
+        name = _header(src, "name") or os.path.splitext(os.path.basename(path))[0]
+        desc = _header(src, "description") or "(no description)"
+        spec = importlib.util.spec_from_file_location(f"skill_{name}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if not hasattr(module, "run"):
+            raise ValueError("skill has no run(args) function")
+        self.skills[name] = Skill(name, desc, path, module.run)
+        return self.skills[name]
+
+    def list(self):
+        return [s.to_dict() for s in sorted(self.skills.values(), key=lambda s: s.name)]
+
+    def has(self, name):
+        return name in self.skills
+
+    def run(self, name, args):
+        if name not in self.skills:
+            raise KeyError(name)
+        return self.skills[name].run(args or {})
+
+    def write(self, name, description, code):
+        if not SKILL_NAME_RE.match(name):
+            raise ValueError("skill name must be lowercase letters, digits, underscores")
+        if "def run(" not in code:
+            raise ValueError("skill code must define run(args)")
+        header = f"# name: {name}\n# description: {description.strip()}\n"
+        path = os.path.join(self.dir, f"{name}.py")
+        with open(path, "w") as f:
+            f.write(header + code.rstrip() + "\n")
+        skill = self._load_file(path)  # validates + hot-loads; raises on error
+        BUS.emit("skill", action="saved", skill=skill.to_dict())
+        return skill
+
+    def read(self, name):
+        path = os.path.join(self.dir, f"{name}.py")
+        with open(path) as f:
+            return f.read()
+
+    def delete(self, name):
+        path = os.path.join(self.dir, f"{name}.py")
+        if os.path.exists(path):
+            os.remove(path)
+        self.skills.pop(name, None)
+        BUS.emit("skill", action="deleted", skill={"name": name})
+
+
+def _header(src, field):
+    m = re.search(rf"^#\s*{field}\s*:\s*(.+)$", src, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+SKILLS = Skills(SKILLS_DIR)
+
+
+# ---------------------------------------------------------------------------
+# Core tools — the built-in verbs the model can use, beyond its skills. The
+# headline ones are create_skill / update_skill: how SCARB grows.
+# ---------------------------------------------------------------------------
+
+def tool_create_skill(args):
+    name = str(args.get("name", "")).strip()
+    desc = str(args.get("description", "")).strip()
+    code = args.get("code", "")
+    if not name or not code:
+        return {"ok": False, "error": "need name, description, and code"}
+    try:
+        skill = SKILLS.write(name, desc, code)
+        return {"ok": True, "result": f"skill '{name}' created and loaded"}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def tool_update_skill(args):
+    return tool_create_skill(args)  # same path: overwrite + reload + validate
+
+
+def tool_read_skill(args):
+    name = str(args.get("name", "")).strip()
+    try:
+        return {"ok": True, "result": SKILLS.read(name)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def tool_delete_skill(args):
+    name = str(args.get("name", "")).strip()
+    SKILLS.delete(name)
+    return {"ok": True, "result": f"deleted '{name}'"}
+
+
+def tool_list_skills(args):
+    return {"ok": True, "result": SKILLS.list()}
+
+
+def _safe_path(p):
+    full = os.path.abspath(os.path.join(HERE, p)) if not os.path.isabs(p) else os.path.abspath(p)
+    return full
+
+
+def tool_read_file(args):
+    try:
+        with open(_safe_path(args.get("path", "")), "r", errors="replace") as f:
+            data = f.read()
+        return {"ok": True, "result": data[:20000]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def tool_write_file(args):
+    try:
+        path = _safe_path(args.get("path", ""))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(args.get("content", ""))
+        return {"ok": True, "result": f"wrote {path}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def tool_run_shell(args):
+    cmd = args.get("command", "")
+    if not cmd:
+        return {"ok": False, "error": "no command"}
+    try:
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                              timeout=int(args.get("timeout", 60)), cwd=HERE)
+        out = (proc.stdout + proc.stderr)[-8000:]
+        return {"ok": proc.returncode == 0, "result": out, "exit_code": proc.returncode}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "command timed out"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def tool_read_self(args):
+    which = args.get("file", "scarb.py")
+    allowed = {"scarb.py", "identity.md", "soul.md"}
+    if which not in allowed:
+        return {"ok": False, "error": f"file must be one of {sorted(allowed)}"}
+    try:
+        with open(os.path.join(HERE, which)) as f:
+            return {"ok": True, "result": f.read()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+CORE_TOOLS = {
+    "create_skill": tool_create_skill,
+    "update_skill": tool_update_skill,
+    "read_skill": tool_read_skill,
+    "delete_skill": tool_delete_skill,
+    "list_skills": tool_list_skills,
+    "read_file": tool_read_file,
+    "write_file": tool_write_file,
+    "run_shell": tool_run_shell,
+    "read_self": tool_read_self,
+}
+
+
+def dispatch(tool, args):
+    if tool in CORE_TOOLS:
+        return CORE_TOOLS[tool](args or {})
+    if SKILLS.has(tool):
+        try:
+            result = SKILLS.run(tool, args or {})
+            if isinstance(result, dict) and "ok" in result:
+                return result
+            return {"ok": True, "result": result}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                    "trace": traceback.format_exc()[-1500:]}
+    return {"ok": False, "error": f"no tool or skill named '{tool}'. "
+            "If you need this ability, create it with create_skill."}
+
+
+# ---------------------------------------------------------------------------
+# The agent loop — read soul + identity, plan, act with tools, build skills,
+# stream every step to the UI, and finish when the task is truly done.
+# ---------------------------------------------------------------------------
+
+def read_doc(name, fallback=""):
+    try:
+        with open(os.path.join(HERE, name)) as f:
+            return f.read()
+    except Exception:
+        return fallback
+
+
+ACTION_RULES = """
+HOW YOU ACT
+You work in steps. To use a tool, reply with EXACTLY one fenced json block and nothing else:
+```json
+{"tool": "<tool or skill name>", "args": { ... }}
+```
+I run it and reply with the result, then you continue. When the task is finished, reply in plain words with NO json block — that is your final answer to the human.
+
+CORE TOOLS
+- list_skills {} — see what you can already do.
+- create_skill {"name","description","code"} — write a NEW skill when no skill fits the task. code is a full Python module (standard library only) defining run(args) that returns a value or {"ok":bool,"result"/"error":...}. It is validated and hot-loaded immediately; if it errors you get the message to fix it. Reuse skills forever — never solve the same thing twice.
+- update_skill {"name","description","code"} — rewrite a skill (e.g. to fix or improve it).
+- read_skill {"name"} / delete_skill {"name"} / list_skills {}
+- read_file {"path"} / write_file {"path","content"} — paths are relative to SCARB's folder.
+- run_shell {"command","timeout"} — run a shell command on this machine.
+- read_self {"file"} — read your own scarb.py, identity.md, or soul.md, to improve yourself.
+Plus every skill below is callable directly by its name as a tool.
+
+RULES
+- When you lack a capability, CREATE A SKILL for it, then use it. That is how you grow.
+- Prefer an existing skill over ad-hoc shell. Keep skills small and general.
+- Do the task fully; verify results before declaring success.
+- Ask before anything destructive, irreversible, or far-reaching (deleting data, sending/publishing, spending). Being able to do a thing is not permission to.
+- Be honest: if something failed, say so and show the output.
+"""
+
+
+def build_system():
+    identity = read_doc("identity.md")
+    soul = read_doc("soul.md")
+    skill_lines = "\n".join(f"- {s['name']}: {s['description']}" for s in SKILLS.list()) or "(none yet)"
+    return (
+        f"You are SCARB.\n\n# IDENTITY\n{identity}\n\n# SOUL\n{soul}\n\n"
+        f"{ACTION_RULES}\n\nYOUR SKILLS RIGHT NOW:\n{skill_lines}\n"
+    )
+
+
+ACTION_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def extract_action(text):
+    blocks = ACTION_RE.findall(text)
+    for raw in reversed(blocks):
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict) and "tool" in obj:
+                return obj
+        except Exception:
+            continue
+    return None
+
+
+HISTORY = []  # conversation across turns: {"role","content"}
+HISTORY_LOCK = threading.Lock()
+BUSY = threading.Event()
+
+
+def run_turn(user_message, kind="cloud", max_steps=12):
+    """Run one full agent turn (may take several tool steps). Streams via BUS."""
+    if BUSY.is_set():
+        BUS.emit("error", text="SCARB is already working on something.")
+        return
+    BUSY.set()
+    try:
+        with HISTORY_LOCK:
+            HISTORY.append({"role": "user", "content": user_message})
+            messages = list(HISTORY)
+        BUS.emit("user", text=user_message)
+        BUS.emit("status", text="thinking", model=provider_for(kind)[1], where=kind)
+
+        system = build_system()
+        for step in range(max_steps):
+            try:
+                reply = strip_thinking(llm_chat(system, messages, kind=kind))
+            except LLMError as e:
+                # If the cloud is unreachable, try the local model once.
+                if kind == "cloud" and CONFIG["local_base_url"]:
+                    BUS.emit("status", text=f"cloud failed ({e}); trying local")
+                    try:
+                        reply = strip_thinking(llm_chat(system, messages, kind="local"))
+                        kind = "local"
+                    except LLMError as e2:
+                        BUS.emit("error", text=f"model error: {e2}")
+                        return
+                else:
+                    BUS.emit("error", text=f"model error: {e}")
+                    return
+
+            action = extract_action(reply)
+            prose = ACTION_RE.sub("", reply).strip()
+
+            if action:
+                if prose:
+                    BUS.emit("thought", text=prose)
+                BUS.emit("action", tool=action["tool"], args=action.get("args", {}))
+                result = dispatch(action["tool"], action.get("args", {}))
+                BUS.emit("result", tool=action["tool"], ok=bool(result.get("ok", True)),
+                         result=_short(result))
+                messages.append({"role": "assistant", "content": reply})
+                messages.append({"role": "user",
+                                 "content": "TOOL RESULT:\n" + json.dumps(result)[:6000]})
+                continue
+
+            # No action -> final answer.
+            BUS.emit("assistant", text=reply)
+            with HISTORY_LOCK:
+                HISTORY.append({"role": "assistant", "content": reply})
+            return
+
+        BUS.emit("assistant", text="(I hit my step limit for this task — tell me to continue and I'll pick up where I left off.)")
+    finally:
+        BUS.emit("status", text="idle")
+        BUSY.clear()
+
+
+def _short(result):
+    s = json.dumps(result.get("result", result.get("error", "")), default=str)
+    return s[:1200]
+
+
+# ---------------------------------------------------------------------------
+# HTTP server — serves the UI and the API, streams events over SSE.
+# ---------------------------------------------------------------------------
+
+def authed(handler):
+    if not CONFIG["token"]:
+        return True
+    supplied = handler.headers.get("X-Scarb-Token", "")
+    if supplied == CONFIG["token"]:
+        return True
+    qs = handler.path.split("token=")
+    return len(qs) > 1 and qs[1].split("&")[0] == CONFIG["token"]
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body, ctype="application/json"):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body).encode()
+        elif isinstance(body, str):
+            body = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/" or path == "/index.html":
+            return self._serve_file("index.html", "text/html; charset=utf-8")
+        if path == "/app.js":
+            return self._serve_file("app.js", "text/javascript; charset=utf-8")
+        if path == "/style.css":
+            return self._serve_file("style.css", "text/css; charset=utf-8")
+        if path == "/api/ping":
+            # Unauthenticated: lets the UI learn whether a token is required
+            # before it tries anything, so it never guesses wrong.
+            return self._send(200, {"ok": True, "needs_token": bool(CONFIG["token"]),
+                                    "version": VERSION})
+        if path == "/api/state":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            return self._send(200, {
+                "version": VERSION,
+                "skills": SKILLS.list(),
+                "identity": read_doc("identity.md"),
+                "soul": read_doc("soul.md"),
+                "history": HISTORY[-50:],
+                "provider": provider_for("cloud")[0],
+                "model": provider_for("cloud")[1],
+                "local_model": CONFIG["local_model"],
+                "busy": BUSY.is_set(),
+            })
+        if path == "/events":
+            return self._serve_events()
+        return self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if not authed(self):
+            return self._send(401, {"error": "bad token"})
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw or b"{}")
+        except Exception:
+            body = {}
+        if path == "/api/send":
+            message = str(body.get("message", "")).strip()
+            kind = "local" if body.get("local") else "cloud"
+            if not message:
+                return self._send(400, {"error": "empty message"})
+            threading.Thread(target=run_turn, args=(message, kind), daemon=True).start()
+            return self._send(200, {"ok": True})
+        if path == "/api/save_doc":
+            name = body.get("name")
+            if name not in ("identity.md", "soul.md"):
+                return self._send(400, {"error": "name must be identity.md or soul.md"})
+            with open(os.path.join(HERE, name), "w") as f:
+                f.write(body.get("content", ""))
+            BUS.emit("doc", name=name)
+            return self._send(200, {"ok": True})
+        if path == "/api/reset":
+            with HISTORY_LOCK:
+                HISTORY.clear()
+            BUS.emit("reset")
+            return self._send(200, {"ok": True})
+        return self._send(404, {"error": "not found"})
+
+    def _serve_file(self, name, ctype):
+        try:
+            with open(os.path.join(WEB_DIR, name), "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            self._send(404, "not found", "text/plain")
+
+    def _serve_events(self):
+        if not authed(self):
+            return self._send(401, {"error": "bad token"})
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        q = BUS.subscribe()
+        try:
+            for event in BUS.log[-30:]:
+                self._write_event(event)
+            while True:
+                try:
+                    event = q.get(timeout=20)
+                    self._write_event(event)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            BUS.unsubscribe(q)
+
+    def _write_event(self, event):
+        self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+        self.wfile.flush()
+
+
+def tailscale_url(port):
+    try:
+        ip = subprocess.run(["tailscale", "ip", "-4"], capture_output=True,
+                            text=True, timeout=5).stdout.strip().split("\n")[0]
+        if ip:
+            return f"http://{ip}:{port}"
+    except Exception:
+        pass
+    return None
+
+
+def main():
+    server = ThreadingHTTPServer((CONFIG["host"], CONFIG["port"]), Handler)
+    port = CONFIG["port"]
+    print(f"\n  ✦ SCARB {VERSION} — self-improving assistant")
+    print(f"    local:     http://127.0.0.1:{port}")
+    ts = tailscale_url(port)
+    if ts:
+        print(f"    tailscale: {ts}   (open this on your phone)")
+    prov, model, _, key = provider_for("cloud")
+    print(f"    cloud:     {prov} / {model}" + ("" if key or prov == "ollama" else "  (no SCARB_API_KEY set)"))
+    print(f"    local:     ollama / {CONFIG['local_model']}")
+    if not CONFIG["token"]:
+        print("    ⚠  no SCARB_TOKEN set — anyone on your network can use SCARB. Set one before exposing it.")
+    else:
+        print("    🔒 token auth on")
+    print(f"    skills:    {len(SKILLS.skills)} loaded\n")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  scarab sleeps.")
+
+
+if __name__ == "__main__":
+    main()
