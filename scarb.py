@@ -301,6 +301,58 @@ def _openai_compatible(system, messages, model, base, key, max_tokens):
     return text
 
 
+def openai_message(system, messages, kind, tools, max_tokens=2048):
+    """Native tool-calling call for OpenAI-compatible providers. Returns the raw
+    assistant message dict — which carries structured `tool_calls` the model
+    cannot fake into prose, so it can't claim it did something it didn't."""
+    provider, model, base, key = provider_for(kind)
+    msgs = [{"role": "system", "content": system}] + messages
+    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens, "stream": False}
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    headers = {"content-type": "application/json"}
+    if key:
+        headers["authorization"] = f"Bearer {key}"
+    data = _http_json(base.rstrip("/") + "/chat/completions", payload, headers)
+    if "error" in data:
+        raise LLMError(str(data["error"]))
+    choices = data.get("choices", [])
+    if not choices:
+        raise LLMError("no choices returned")
+    return choices[0].get("message", {}) or {}
+
+
+def tool_specs():
+    """OpenAI-style function schemas for every core tool and skill. Args are a
+    free-form object; each tool's description says what keys to pass."""
+    core_desc = {
+        "create_skill": "Create a NEW skill. args: name, description, code (a full Python module defining run(args)).",
+        "update_skill": "Rewrite an existing skill. args: name, description, code.",
+        "read_skill": "Read a skill's source. args: name.",
+        "delete_skill": "Delete a skill. args: name.",
+        "list_skills": "List every skill you have. args: {}.",
+        "read_file": "Read a file (path relative to SCARB's folder). args: path.",
+        "write_file": "Write a file. args: path, content.",
+        "run_shell": "Run a shell command on this machine. args: command, timeout.",
+        "read_self": "Read your own scarb.py / identity.md / soul.md. args: file.",
+        "applescript": "Run AppleScript to control this Mac. args: script.",
+        "open_app": "Open an app or a URL/file. args: name or url.",
+        "type_text": "Type text into the frontmost app. args: text.",
+        "screenshot": "Capture the screen to memory/screen.png. args: {}.",
+    }
+    specs = []
+    for name in CORE_TOOLS:
+        specs.append({"type": "function", "function": {
+            "name": name, "description": core_desc.get(name, name)[:1000],
+            "parameters": {"type": "object", "additionalProperties": True}}})
+    for s in SKILLS.list():
+        specs.append({"type": "function", "function": {
+            "name": s["name"], "description": s["description"][:1000],
+            "parameters": {"type": "object", "additionalProperties": True}}})
+    return specs
+
+
 def friendly_error(err, kind):
     """Turn a raw LLM error into something that tells you how to fix it."""
     msg = str(err)
@@ -661,10 +713,11 @@ COMPUTER USE (you control this Mac)
 Plus every skill below is callable directly by its name as a tool.
 
 RULES
-- When you lack a capability, CREATE A SKILL for it, then use it. That is how you grow — don't just describe the skill, emit the create_skill action.
-- One action per step. Do the task fully; verify before declaring success.
+- You can ONLY affect the computer by calling a tool and getting its result back. You have NO other powers. If you have not received a tool result, the thing did NOT happen.
+- NEVER say a task is done, or report a session started / file created / app opened / state changed, unless a tool result confirmed it. Do not fabricate results. If you haven't called the tool yet, call it now instead of describing it.
+- When you lack a capability, CREATE A SKILL for it (create_skill), then call it. That is how you grow.
+- Do the task fully; check the tool result before telling the human it worked. If a result says ok:false, report the error — don't pretend it succeeded.
 - Ask before anything destructive, irreversible, or far-reaching (deleting data, sending/publishing, spending, quitting apps with unsaved work). Being able to do a thing is not permission to.
-- Be honest: if something failed, say so and show the output.
 """
 
 
@@ -789,17 +842,28 @@ def run_turn(user_message, kind="cloud", max_steps=12):
         BUS.emit("status", text="thinking", model=provider_for(kind)[1], where=kind)
 
         system = build_system()
+        native = provider_for(kind)[0] != "anthropic"   # everyone but Anthropic gets native tool-calls
+        specs = tool_specs() if native else None
+
+        def do_action(name, args):
+            BUS.emit("action", tool=name, args=args or {})
+            result = dispatch(name, args or {})
+            BUS.emit("result", tool=name, ok=bool(result.get("ok", True)), result=_short(result))
+            return result
+
         for step in range(max_steps):
+            # --- get one model turn (with the local fallback) ---
             try:
-                reply = strip_thinking(llm_chat(system, messages, kind=kind))
+                if native:
+                    msg = openai_message(system, messages, kind, specs)
+                else:
+                    msg = {"content": llm_chat(system, messages, kind=kind)}
             except LLMError as e:
-                # A real cloud provider failing → fall back to a local model
-                # once. (No point falling back when the cloud IS local Ollama.)
                 if kind == "cloud" and provider_for("cloud")[0] != "ollama" and CONFIG["local_base_url"]:
                     BUS.emit("status", text="cloud failed; trying local")
                     try:
-                        reply = strip_thinking(llm_chat(system, messages, kind="local"))
-                        kind = "local"
+                        kind = "local"; native = True; specs = tool_specs()
+                        msg = openai_message(system, messages, kind, specs)
                     except LLMError as e2:
                         BUS.emit("error", text=friendly_error(e2, "local"))
                         return
@@ -807,25 +871,43 @@ def run_turn(user_message, kind="cloud", max_steps=12):
                     BUS.emit("error", text=friendly_error(e, kind))
                     return
 
-            action = extract_action(reply)
-            prose = ACTION_RE.sub("", reply).strip()
+            content = strip_thinking(msg.get("content") or "")
+            tool_calls = msg.get("tool_calls") or []
 
-            if action:
-                if prose:
-                    BUS.emit("thought", text=prose)
-                BUS.emit("action", tool=action["tool"], args=action.get("args", {}))
-                result = dispatch(action["tool"], action.get("args", {}))
-                BUS.emit("result", tool=action["tool"], ok=bool(result.get("ok", True)),
-                         result=_short(result))
-                messages.append({"role": "assistant", "content": reply})
-                messages.append({"role": "user",
-                                 "content": "TOOL RESULT:\n" + json.dumps(result)[:6000]})
+            # --- native structured tool calls (can't be faked as prose) ---
+            if tool_calls:
+                if content:
+                    BUS.emit("thought", text=content)
+                messages.append({"role": "assistant", "content": content or None,
+                                 "tool_calls": tool_calls})
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    raw = fn.get("arguments", "{}")
+                    try:
+                        args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+                    except Exception:
+                        args = {}
+                    result = do_action(name, args)
+                    messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                                     "content": json.dumps(result)[:6000]})
                 continue
 
-            # No action -> final answer.
-            BUS.emit("assistant", text=reply)
+            # --- prose-JSON action (fallback for models that ignore tools) ---
+            action = extract_action(content)
+            if action:
+                prose = ACTION_RE.sub("", content).strip()
+                if prose:
+                    BUS.emit("thought", text=prose)
+                result = do_action(action["tool"], action.get("args", {}))
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": "TOOL RESULT:\n" + json.dumps(result)[:6000]})
+                continue
+
+            # --- no tool call → final answer ---
+            BUS.emit("assistant", text=content)
             with HISTORY_LOCK:
-                HISTORY.append({"role": "assistant", "content": reply})
+                HISTORY.append({"role": "assistant", "content": content})
                 save_history()
             return
 
