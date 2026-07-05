@@ -301,6 +301,24 @@ def _openai_compatible(system, messages, model, base, key, max_tokens):
     return text
 
 
+def friendly_error(err, kind):
+    """Turn a raw LLM error into something that tells you how to fix it."""
+    msg = str(err)
+    provider, model, base, key = provider_for(kind)
+    local = provider == "ollama" or kind == "local"
+    if "Connection refused" in msg or "cannot reach" in msg:
+        if local:
+            return ("Can't reach Ollama at " + base + ". Start it with `ollama serve`, "
+                    "pull a model with `ollama pull llama3.2`, or open Setup → Cloud model and add an API key.")
+        return f"Can't reach {provider} ({base}). Check your connection, or pick another provider in Setup."
+    if "not found" in msg.lower() and local:
+        return (f"Ollama doesn't have the model '{model}'. Run `ollama pull {model}` "
+                "(or tap Detect Ollama in Setup and choose one you have).")
+    if "401" in msg or "invalid" in msg.lower() or "api key" in msg.lower():
+        return f"{provider} rejected the API key. Re-check it in Setup → Cloud model."
+    return msg
+
+
 def strip_thinking(text):
     while "<think>" in text and "</think>" in text:
         a = text.index("<think>")
@@ -723,17 +741,18 @@ def run_turn(user_message, kind="cloud", max_steps=12):
             try:
                 reply = strip_thinking(llm_chat(system, messages, kind=kind))
             except LLMError as e:
-                # If the cloud is unreachable, try the local model once.
-                if kind == "cloud" and CONFIG["local_base_url"]:
-                    BUS.emit("status", text=f"cloud failed ({e}); trying local")
+                # A real cloud provider failing → fall back to a local model
+                # once. (No point falling back when the cloud IS local Ollama.)
+                if kind == "cloud" and provider_for("cloud")[0] != "ollama" and CONFIG["local_base_url"]:
+                    BUS.emit("status", text="cloud failed; trying local")
                     try:
                         reply = strip_thinking(llm_chat(system, messages, kind="local"))
                         kind = "local"
                     except LLMError as e2:
-                        BUS.emit("error", text=f"model error: {e2}")
+                        BUS.emit("error", text=friendly_error(e2, "local"))
                         return
                 else:
-                    BUS.emit("error", text=f"model error: {e}")
+                    BUS.emit("error", text=friendly_error(e, kind))
                     return
 
             action = extract_action(reply)
