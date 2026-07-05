@@ -801,30 +801,84 @@ def extract_action(text):
     return found
 
 
-HISTORY = []  # conversation across turns: {"role","content"}
-HISTORY_LOCK = threading.Lock()
+# ---- conversations: many chats, each persisted, browsable from the UI ------
+CONVOS = []            # list of {id, title, created, updated, messages:[...]}
+CURRENT_ID = [None]    # boxed so helpers can rebind it
+CONVO_LOCK = threading.Lock()
 BUSY = threading.Event()
-HISTORY_PATH = os.path.join(MEMORY_DIR, "history.json")
+CONVOS_PATH = os.path.join(MEMORY_DIR, "conversations.json")
+LEGACY_HISTORY = os.path.join(MEMORY_DIR, "history.json")
 
 
-def load_history():
-    """Bring the conversation back after a restart, so nothing is lost."""
-    try:
-        with open(HISTORY_PATH) as f:
-            saved = json.load(f)
-        if isinstance(saved, list):
-            HISTORY.extend(saved[-400:])
-    except Exception:
-        pass
+_ID_COUNTER = [0]
 
 
-def save_history():
+def _new_id():
+    _ID_COUNTER[0] += 1
+    return f"{int(time.time() * 1000)}-{_ID_COUNTER[0]}"
+
+
+def _title_from(text):
+    t = " ".join(text.strip().split())
+    return (t[:44] + "…") if len(t) > 45 else (t or "New chat")
+
+
+def new_convo():
+    c = {"id": _new_id(), "title": "New chat", "created": time.time(),
+         "updated": time.time(), "messages": []}
+    CONVOS.append(c)
+    CURRENT_ID[0] = c["id"]
+    return c
+
+
+def current_convo():
+    for c in CONVOS:
+        if c["id"] == CURRENT_ID[0]:
+            return c
+    return new_convo()
+
+
+def save_convos():
     try:
         os.makedirs(MEMORY_DIR, exist_ok=True)
-        with open(HISTORY_PATH, "w") as f:
-            json.dump(HISTORY[-400:], f)
+        with open(CONVOS_PATH, "w") as f:
+            json.dump({"current": CURRENT_ID[0], "convos": CONVOS[-100:]}, f)
     except Exception:
         pass
+
+
+def load_convos():
+    try:
+        with open(CONVOS_PATH) as f:
+            data = json.load(f)
+        CONVOS.extend(data.get("convos", []))
+        CURRENT_ID[0] = data.get("current")
+    except Exception:
+        pass
+    if not CONVOS:
+        # migrate a single legacy history.json into the first conversation
+        try:
+            with open(LEGACY_HISTORY) as f:
+                msgs = json.load(f)
+            if isinstance(msgs, list) and msgs:
+                c = new_convo()
+                c["messages"] = msgs[-400:]
+                first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
+                c["title"] = _title_from(first_user)
+        except Exception:
+            pass
+    if not CONVOS:
+        new_convo()
+    if not any(c["id"] == CURRENT_ID[0] for c in CONVOS):
+        CURRENT_ID[0] = CONVOS[-1]["id"]
+
+
+def convo_summaries():
+    out = []
+    for c in sorted(CONVOS, key=lambda c: c.get("updated", 0), reverse=True):
+        out.append({"id": c["id"], "title": c["title"], "updated": c.get("updated", 0),
+                    "count": len(c["messages"]), "current": c["id"] == CURRENT_ID[0]})
+    return out
 
 
 def run_turn(user_message, kind="cloud", max_steps=12):
@@ -834,10 +888,14 @@ def run_turn(user_message, kind="cloud", max_steps=12):
         return
     BUSY.set()
     try:
-        with HISTORY_LOCK:
-            HISTORY.append({"role": "user", "content": user_message})
-            messages = list(HISTORY)
-            save_history()
+        with CONVO_LOCK:
+            convo = current_convo()
+            convo["messages"].append({"role": "user", "content": user_message})
+            if convo["title"] == "New chat":
+                convo["title"] = _title_from(user_message)
+            convo["updated"] = time.time()
+            messages = list(convo["messages"])
+            save_convos()
         BUS.emit("user", text=user_message)
         BUS.emit("status", text="thinking", model=provider_for(kind)[1], where=kind)
 
@@ -906,9 +964,11 @@ def run_turn(user_message, kind="cloud", max_steps=12):
 
             # --- no tool call → final answer ---
             BUS.emit("assistant", text=content)
-            with HISTORY_LOCK:
-                HISTORY.append({"role": "assistant", "content": content})
-                save_history()
+            with CONVO_LOCK:
+                convo = current_convo()
+                convo["messages"].append({"role": "assistant", "content": content})
+                convo["updated"] = time.time()
+                save_convos()
             return
 
         BUS.emit("assistant", text="(I hit my step limit for this task — tell me to continue and I'll pick up where I left off.)")
@@ -968,17 +1028,30 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
+            with CONVO_LOCK:
+                convo = current_convo()
+                history = convo["messages"][-80:]
+                convo_id, convo_title = convo["id"], convo["title"]
+                summaries = convo_summaries()
             return self._send(200, {
                 "version": VERSION,
                 "skills": SKILLS.list(),
                 "identity": read_doc("identity.md"),
                 "soul": read_doc("soul.md"),
-                "history": HISTORY[-50:],
+                "history": history,
+                "conversation_id": convo_id,
+                "conversation_title": convo_title,
+                "conversations": summaries,
                 "provider": provider_for("cloud")[0],
                 "model": provider_for("cloud")[1],
                 "local_model": CONFIG["local_model"],
                 "busy": BUSY.is_set(),
             })
+        if path == "/api/conversations":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            with CONVO_LOCK:
+                return self._send(200, {"conversations": convo_summaries()})
         if path == "/api/config":
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
@@ -1039,12 +1112,33 @@ class Handler(BaseHTTPRequestHandler):
                 f.write(body.get("content", ""))
             BUS.emit("doc", name=name)
             return self._send(200, {"ok": True})
-        if path == "/api/reset":
-            with HISTORY_LOCK:
-                HISTORY.clear()
-                save_history()
+        if path == "/api/reset" or path == "/api/conversation":
+            # action: new (default) | load | delete
+            action = body.get("action", "new")
+            with CONVO_LOCK:
+                if action == "load":
+                    cid = body.get("id")
+                    if any(c["id"] == cid for c in CONVOS):
+                        CURRENT_ID[0] = cid
+                    save_convos()
+                    convo = current_convo()
+                    result = {"ok": True, "id": convo["id"], "title": convo["title"],
+                              "messages": convo["messages"][-80:]}
+                elif action == "delete":
+                    cid = body.get("id")
+                    CONVOS[:] = [c for c in CONVOS if c["id"] != cid]
+                    if not CONVOS:
+                        new_convo()
+                    if not any(c["id"] == CURRENT_ID[0] for c in CONVOS):
+                        CURRENT_ID[0] = CONVOS[-1]["id"]
+                    save_convos()
+                    result = {"ok": True, "conversations": convo_summaries()}
+                else:  # new
+                    convo = new_convo()
+                    save_convos()
+                    result = {"ok": True, "id": convo["id"]}
             BUS.emit("reset")
-            return self._send(200, {"ok": True})
+            return self._send(200, result)
         if path == "/api/config":
             # Which provider these edits apply to (defaults to the active one).
             if "provider" in body and str(body["provider"]).strip():
@@ -1153,7 +1247,7 @@ def local_ip():
 
 
 def main():
-    load_history()
+    load_convos()
     server = ThreadingHTTPServer((CONFIG["host"], CONFIG["port"]), Handler)
     port = CONFIG["port"]
     print(f"\n  ✦ SCARB {VERSION} — self-improving assistant")

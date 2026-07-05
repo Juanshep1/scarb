@@ -18,26 +18,42 @@
   </div>
 </div>
 
-<div class="mobtabs">
+<div class="mobtabs" id="mobtabs">
   <button data-mob="chat" class="active">Chat</button>
   <button data-mob="skills">Skills</button>
 </div>
+<div class="swipe-hint" id="swipeHint">swipe up for tabs</div>
+
+<!-- conversation history drawer (opens from the scarab icon) -->
+<div class="drawer-scrim" id="drawerScrim"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <span>Conversations</span>
+    <button class="iconbtn" id="drawerNew" title="New conversation">＋ New</button>
+  </div>
+  <div class="convo-list" id="convoList"></div>
+</aside>
 
 <div class="app" id="app">
   <div class="main">
     <header>
-      <svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
-        <ellipse cx="24" cy="27" rx="12" ry="15" fill="none" stroke="#e8c274" stroke-width="2.4"/>
-        <circle cx="24" cy="10" r="4.5" fill="none" stroke="#e8c274" stroke-width="2.4"/>
-        <line x1="24" y1="14" x2="24" y2="42" stroke="#e8c274" stroke-width="2.4"/>
-        <path d="M12 20 L2 14 M12 27 L1 27 M12 34 L2 40" stroke="#a8863f" stroke-width="2.2" fill="none"/>
-        <path d="M36 20 L46 14 M36 27 L47 27 M36 34 L46 40" stroke="#a8863f" stroke-width="2.2" fill="none"/>
-      </svg>
+      <button class="markbtn" id="markBtn" title="Conversation history">
+        <svg class="mark" id="scarab" viewBox="0 0 48 48" aria-hidden="true">
+          <g class="legs">
+            <path d="M12 20 L2 14 M12 27 L1 27 M12 34 L2 40" stroke="#a8863f" stroke-width="2.2" fill="none"/>
+            <path d="M36 20 L46 14 M36 27 L47 27 M36 34 L46 40" stroke="#a8863f" stroke-width="2.2" fill="none"/>
+          </g>
+          <line x1="24" y1="14" x2="24" y2="42" stroke="#e8c274" stroke-width="2.4"/>
+          <ellipse class="shell" cx="24" cy="27" rx="12" ry="15" fill="none" stroke="#e8c274" stroke-width="2.4"/>
+          <circle class="head" cx="24" cy="10" r="4.5" fill="none" stroke="#e8c274" stroke-width="2.4"/>
+        </svg>
+      </button>
       <div>
         <div class="title"><b>SCARB</b></div>
         <div class="subtitle" id="subtitle">self-improving assistant</div>
       </div>
       <div class="head-right">
+        <button class="iconbtn" id="newChat" title="New conversation">＋</button>
         <span class="badge" id="statusBadge"><span class="dot"></span><span id="statusText">idle</span></span>
       </div>
     </header>

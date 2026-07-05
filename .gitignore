@@ -4,3 +4,7 @@ memory/notes.json
 .DS_Store
 .env
 config.json
+memory/history.json
+memory/conversations.json
+test_projects/
+~

@@ -117,7 +117,59 @@ function handle(ev) {
 function setStatus(text, busy) {
   $("statusText").textContent = text;
   $("statusBadge").classList.toggle("busy", !!busy);
+  document.body.classList.toggle("busy", !!busy);   // drives the scarab animation
   $("send").disabled = !!busy && text !== "reconnecting…";
+}
+
+// ---- conversation history drawer -----------------------------------------
+function openDrawer() { loadConvos(); $("drawer").classList.add("open"); $("drawerScrim").classList.add("open"); }
+function closeDrawer() { $("drawer").classList.remove("open"); $("drawerScrim").classList.remove("open"); }
+$("markBtn").onclick = openDrawer;
+$("drawerScrim").onclick = closeDrawer;
+
+async function loadConvos() {
+  const r = await api("/api/conversations");
+  const list = $("convoList"); list.innerHTML = "";
+  (r.conversations || []).forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "convo" + (c.current ? " active" : "");
+    const body = document.createElement("div"); body.className = "body";
+    const t = document.createElement("div"); t.className = "t"; t.textContent = c.title || "New chat";
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = c.count + " msg · " + timeAgo(c.updated);
+    body.appendChild(t); body.appendChild(meta);
+    const del = document.createElement("button"); del.className = "del"; del.textContent = "✕";
+    del.onclick = async (e) => { e.stopPropagation(); await api("/api/conversation", "POST", { action: "delete", id: c.id }); loadConvos(); };
+    row.appendChild(body); row.appendChild(del);
+    row.onclick = () => loadConversation(c.id);
+    list.appendChild(row);
+  });
+}
+
+async function loadConversation(id) {
+  const r = await api("/api/conversation", "POST", { action: "load", id });
+  stream.innerHTML = "";
+  (r.messages || []).forEach((m) => m.role === "user" ? addUser(m.content) : addScarb(m.content));
+  BOOT_T = Date.now() / 1000;
+  closeDrawer();
+}
+
+async function newConversation() {
+  await api("/api/conversation", "POST", { action: "new" });
+  stream.innerHTML = "";
+  BOOT_T = Date.now() / 1000;
+  closeDrawer();
+}
+$("newChat").onclick = newConversation;
+$("drawerNew").onclick = newConversation;
+
+function timeAgo(t) {
+  if (!t) return "";
+  const s = Date.now() / 1000 - t;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
 }
 
 // ---- skills panel --------------------------------------------------------
@@ -335,6 +387,29 @@ document.querySelectorAll(".mobtabs button").forEach((b) => {
     $("app").classList.toggle("show-skills", b.dataset.mob === "skills");
   };
 });
+
+// Swipe up (from the lower part of the screen) reveals the Chat/Skills tabs;
+// swipe down hides them again, giving the chat the whole screen by default.
+function showTabs() { $("app").classList.add("tabs-shown"); const h = $("swipeHint"); if (h) h.classList.add("gone"); }
+function hideTabs() { $("app").classList.remove("tabs-shown"); }
+(function () {
+  let startY = 0, startX = 0, tracking = false;
+  window.addEventListener("touchstart", (e) => {
+    const t = e.touches[0];
+    startY = t.clientY; startX = t.clientX;
+    // only arm the gesture in the lower third, so it doesn't fight chat scrolling
+    tracking = t.clientY > window.innerHeight * 0.6;
+  }, { passive: true });
+  window.addEventListener("touchend", (e) => {
+    if (!tracking) return;
+    const t = e.changedTouches[0];
+    const dy = t.clientY - startY, dx = Math.abs(t.clientX - startX);
+    if (dx < 60 && dy < -45) showTabs();
+    else if (dx < 60 && dy > 45) hideTabs();
+  }, { passive: true });
+  // auto-fade the hint after a few seconds
+  setTimeout(() => { const h = $("swipeHint"); if (h) h.classList.add("gone"); }, 4000);
+})();
 function showSide() {
   if (window.innerWidth <= 820) { /* leave user where they are */ }
 }

@@ -110,6 +110,22 @@ def run(args):
     return {"ok": True, "result": str(args.get("text", ""))[::-1]}
 ```
 
+## Conversations
+
+SCARB keeps every chat. Tap the **scarab icon** (top-left) to open the history
+drawer and jump between past conversations, or **＋** to start a new one. Each
+conversation is titled from its first message and persists across restarts in
+`memory/conversations.json`. On a phone, the Chat/Skills tabs tuck away to give
+the chat the whole screen — **swipe up** to bring them back.
+
+## Want to make it a real iOS app?
+
+See **[IOS_APP.md](IOS_APP.md)** for a full roadmap — a thin native SwiftUI
+client over Tailscale (Live Activities, push, Siri Shortcuts, share sheet), or
+a fully on-device build (MLX/llama.cpp + native tools), plus the API surface to
+build against and concrete improvements (approvals, streaming, vector memory,
+scheduled skills, voice).
+
 ## Its soul and identity
 
 Two Markdown files steer everything, and you can edit them right in the UI
