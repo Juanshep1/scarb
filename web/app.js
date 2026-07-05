@@ -209,6 +209,26 @@ function reflectProvider() {
   $("keyState").className = "setup-note" + (isLocal ? "" : (hasKey ? " ok" : " bad"));
   populateModels(MODEL_CACHE[p] || CURATED[p] || [], SAVED_MODELS[p] || "");
   updateModelHint();
+  // Auto-load the full live catalogue when we can (public lists always work;
+  // keyed providers need a saved key) so the dropdown fills itself in.
+  const publicList = (p === "openrouter" || p === "ollama-cloud");
+  if (!MODEL_CACHE[p] && (publicList || hasKey || p === "ollama")) fetchModels(p);
+}
+
+async function fetchModels(p) {
+  const note = $("modelsNote"); note.textContent = "loading models…"; note.className = "setup-note";
+  const icon = $("refreshModels"); icon.classList.add("spin");
+  const r = await api("/api/models?provider=" + encodeURIComponent(p));
+  icon.classList.remove("spin");
+  if ($("cfgProvider").value !== p) return;   // user moved on
+  if (r.ok && r.models.length) {
+    MODEL_CACHE[p] = r.models;
+    populateModels(r.models, SAVED_MODELS[p] || $("cfgModel").value);
+    note.textContent = r.models.length + " models"; note.className = "setup-note ok";
+  } else {
+    note.textContent = r.error ? "✗ " + r.error : "";
+    note.className = "setup-note" + (r.error ? " bad" : "");
+  }
 }
 
 function populateModels(list, selected) {
@@ -237,20 +257,10 @@ function updateModelHint() {
 }
 $("cfgProvider").onchange = reflectProvider;
 
-$("refreshModels").onclick = async () => {
+$("refreshModels").onclick = () => {
   const p = $("cfgProvider").value;
-  const icon = $("refreshModels"); icon.classList.add("spin");
-  const note = $("modelsNote"); note.textContent = "fetching models…"; note.className = "setup-note";
-  const r = await api("/api/models?provider=" + encodeURIComponent(p));
-  icon.classList.remove("spin");
-  if (r.ok && r.models.length) {
-    MODEL_CACHE[p] = r.models;
-    populateModels(r.models, SAVED_MODELS[p] || $("cfgModel").value);
-    note.textContent = r.models.length + " models"; note.className = "setup-note ok";
-  } else {
-    note.textContent = r.error ? "✗ " + r.error : "no models returned";
-    note.className = "setup-note bad";
-  }
+  delete MODEL_CACHE[p];   // force a fresh pull
+  fetchModels(p);
 };
 
 $("cfgSave").onclick = async () => {

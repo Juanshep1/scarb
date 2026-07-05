@@ -368,12 +368,17 @@ class Skills:
             src = f.read()
         name = _header(src, "name") or os.path.splitext(os.path.basename(path))[0]
         desc = _header(src, "description") or "(no description)"
-        spec = importlib.util.spec_from_file_location(f"skill_{name}", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        if not hasattr(module, "run"):
-            raise ValueError("skill has no run(args) function")
-        self.skills[name] = Skill(name, desc, path, module.run)
+        # Compile straight from source into a fresh namespace. This avoids
+        # importlib's bytecode cache, which would otherwise serve a skill's OLD
+        # code after an edit made within the same filesystem-mtime second — the
+        # reason "editing a skill did nothing".
+        ns = {"__name__": f"skill_{name}", "__file__": path}
+        code = compile(src, path, "exec")
+        exec(code, ns)
+        run = ns.get("run")
+        if not callable(run):
+            raise ValueError("skill must define a run(args) function")
+        self.skills[name] = Skill(name, desc, path, run)
         return self.skills[name]
 
     def list(self):
@@ -392,6 +397,15 @@ class Skills:
             raise ValueError("skill name must be lowercase letters, digits, underscores")
         if "def run(" not in code:
             raise ValueError("skill code must define run(args)")
+        # Models editing a skill often paste back the existing "# name:" /
+        # "# description:" header inside the code; strip those leading meta
+        # lines so we don't stack duplicate headers on every edit.
+        lines = code.splitlines()
+        while lines and re.match(r"^\s*#\s*(name|description)\s*:", lines[0]):
+            lines.pop(0)
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        code = "\n".join(lines)
         header = f"# name: {name}\n# description: {description.strip()}\n"
         path = os.path.join(self.dir, f"{name}.py")
         with open(path, "w") as f:
