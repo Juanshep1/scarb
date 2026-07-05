@@ -81,9 +81,16 @@ function connect() {
 }
 
 const seen = new Set();
+let BOOT_T = 0;   // set at boot; events older than this were already rendered from saved history
 function handle(ev) {
   const id = ev.kind + ":" + ev.t;
   if (seen.has(id)) return; seen.add(id);
+  // The event stream replays recent events on connect. The saved conversation
+  // is already on screen, so drop stale chat/step replays to avoid duplicates.
+  if (ev.t && BOOT_T && ev.t < BOOT_T - 0.5 &&
+      ["user", "assistant", "thought", "action", "result", "error"].includes(ev.kind)) {
+    return;
+  }
   switch (ev.kind) {
     case "user": /* echoed locally already */ break;
     case "thought": addStep("thought", "reasoning", esc(ev.text)); break;
@@ -366,6 +373,7 @@ async function boot() {
     $("soulEdit").value = state.soul || "";
     $("subtitle").textContent = (state.provider || "") + " · " + (state.model || "");
     (state.history || []).forEach((m) => m.role === "user" ? addUser(m.content) : addScarb(m.content));
+    BOOT_T = Date.now() / 1000;
     connect();
     // Deep-link: /#setup opens the model-setup panel straight away.
     const tab = (location.hash || "").replace("#", "");

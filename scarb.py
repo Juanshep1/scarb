@@ -668,13 +668,29 @@ RULES
 """
 
 
+def load_memory():
+    """The notes SCARB has chosen to remember (via the `remember` skill)."""
+    try:
+        with open(os.path.join(MEMORY_DIR, "notes.json")) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def build_system():
     identity = read_doc("identity.md")
     soul = read_doc("soul.md")
     skill_lines = "\n".join(f"- {s['name']}: {s['description']}" for s in SKILLS.list()) or "(none yet)"
+    notes = load_memory()
+    mem = ""
+    if notes:
+        # Persistent memory: what SCARB already knows about its human, injected
+        # every turn so it carries across sessions. Use `remember` to add more.
+        lines = "\n".join(f"- {k}: {v}" for k, v in list(notes.items())[:40])
+        mem = f"\n\nWHAT YOU REMEMBER (persistent memory — recall/update it with the `remember` skill):\n{lines}\n"
     return (
         f"You are SCARB.\n\n# IDENTITY\n{identity}\n\n# SOUL\n{soul}\n\n"
-        f"{ACTION_RULES}\n\nYOUR SKILLS RIGHT NOW:\n{skill_lines}\n"
+        f"{ACTION_RULES}\n\nYOUR SKILLS RIGHT NOW:\n{skill_lines}\n{mem}"
     )
 
 
@@ -735,6 +751,27 @@ def extract_action(text):
 HISTORY = []  # conversation across turns: {"role","content"}
 HISTORY_LOCK = threading.Lock()
 BUSY = threading.Event()
+HISTORY_PATH = os.path.join(MEMORY_DIR, "history.json")
+
+
+def load_history():
+    """Bring the conversation back after a restart, so nothing is lost."""
+    try:
+        with open(HISTORY_PATH) as f:
+            saved = json.load(f)
+        if isinstance(saved, list):
+            HISTORY.extend(saved[-400:])
+    except Exception:
+        pass
+
+
+def save_history():
+    try:
+        os.makedirs(MEMORY_DIR, exist_ok=True)
+        with open(HISTORY_PATH, "w") as f:
+            json.dump(HISTORY[-400:], f)
+    except Exception:
+        pass
 
 
 def run_turn(user_message, kind="cloud", max_steps=12):
@@ -747,6 +784,7 @@ def run_turn(user_message, kind="cloud", max_steps=12):
         with HISTORY_LOCK:
             HISTORY.append({"role": "user", "content": user_message})
             messages = list(HISTORY)
+            save_history()
         BUS.emit("user", text=user_message)
         BUS.emit("status", text="thinking", model=provider_for(kind)[1], where=kind)
 
@@ -788,6 +826,7 @@ def run_turn(user_message, kind="cloud", max_steps=12):
             BUS.emit("assistant", text=reply)
             with HISTORY_LOCK:
                 HISTORY.append({"role": "assistant", "content": reply})
+                save_history()
             return
 
         BUS.emit("assistant", text="(I hit my step limit for this task — tell me to continue and I'll pick up where I left off.)")
@@ -921,6 +960,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/reset":
             with HISTORY_LOCK:
                 HISTORY.clear()
+                save_history()
             BUS.emit("reset")
             return self._send(200, {"ok": True})
         if path == "/api/config":
@@ -1000,25 +1040,50 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-def tailscale_url(port):
+def tailscale_state(port):
+    """Returns ('url', http://100.x:port) if connected, ('login', msg) if
+    installed-but-logged-out, or (None, None) if not installed."""
     try:
-        ip = subprocess.run(["tailscale", "ip", "-4"], capture_output=True,
-                            text=True, timeout=5).stdout.strip().split("\n")[0]
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True,
+                             text=True, timeout=5)
+        ip = "".join(l for l in out.stdout.strip().split("\n") if l.startswith("100."))
         if ip:
-            return f"http://{ip}:{port}"
+            return ("url", f"http://{ip}:{port}")
+        blob = (out.stdout + out.stderr).lower()
+        if "needslogin" in blob or "logged out" in blob:
+            return ("login", "Tailscale is installed but logged out — run `tailscale up` and log in, then restart SCARB.")
+        return ("login", "Tailscale is installed but has no IP yet — run `tailscale up`.")
+    except FileNotFoundError:
+        return (None, None)
+    except Exception:
+        return (None, None)
+
+
+def local_ip():
+    try:
+        for iface in ("en0", "en1"):
+            r = subprocess.run(["ipconfig", "getifaddr", iface], capture_output=True, text=True, timeout=3)
+            if r.stdout.strip():
+                return r.stdout.strip()
     except Exception:
         pass
     return None
 
 
 def main():
+    load_history()
     server = ThreadingHTTPServer((CONFIG["host"], CONFIG["port"]), Handler)
     port = CONFIG["port"]
     print(f"\n  ✦ SCARB {VERSION} — self-improving assistant")
     print(f"    local:     http://127.0.0.1:{port}")
-    ts = tailscale_url(port)
-    if ts:
-        print(f"    tailscale: {ts}   (open this on your phone)")
+    lan = local_ip()
+    if lan:
+        print(f"    wifi:      http://{lan}:{port}   (same-WiFi devices, e.g. your phone)")
+    kind, msg = tailscale_state(port)
+    if kind == "url":
+        print(f"    tailscale: {msg}   (open this on your phone, anywhere)")
+    elif kind == "login":
+        print(f"    tailscale: {msg}")
     prov, model, _, key = provider_for("cloud")
     print(f"    cloud:     {prov} / {model}" + ("" if key or prov == "ollama" else "  (no SCARB_API_KEY set)"))
     print(f"    local:     ollama / {CONFIG['local_model']}")
