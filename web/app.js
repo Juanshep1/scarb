@@ -388,27 +388,24 @@ document.querySelectorAll(".mobtabs button").forEach((b) => {
   };
 });
 
-// Swipe up (from the lower part of the screen) reveals the Chat/Skills tabs;
-// swipe down hides them again, giving the chat the whole screen by default.
-function showTabs() { $("app").classList.add("tabs-shown"); const h = $("swipeHint"); if (h) h.classList.add("gone"); }
-function hideTabs() { $("app").classList.remove("tabs-shown"); }
+// Chat/Skills tabs are visible by default. Swipe down tucks them away for more
+// chat space; swipe up brings them back.
+function showTabs() { $("app").classList.remove("tabs-hidden"); }
+function hideTabs() { $("app").classList.add("tabs-hidden"); }
 (function () {
   let startY = 0, startX = 0, tracking = false;
   window.addEventListener("touchstart", (e) => {
     const t = e.touches[0];
     startY = t.clientY; startX = t.clientX;
-    // only arm the gesture in the lower third, so it doesn't fight chat scrolling
-    tracking = t.clientY > window.innerHeight * 0.6;
+    tracking = t.clientY > window.innerHeight * 0.55;   // gesture lives in the lower half
   }, { passive: true });
   window.addEventListener("touchend", (e) => {
     if (!tracking) return;
     const t = e.changedTouches[0];
     const dy = t.clientY - startY, dx = Math.abs(t.clientX - startX);
-    if (dx < 60 && dy < -45) showTabs();
-    else if (dx < 60 && dy > 45) hideTabs();
+    if (dx < 60 && dy < -50) showTabs();
+    else if (dx < 60 && dy > 50) hideTabs();
   }, { passive: true });
-  // auto-fade the hint after a few seconds
-  setTimeout(() => { const h = $("swipeHint"); if (h) h.classList.add("gone"); }, 4000);
 })();
 function showSide() {
   if (window.innerWidth <= 820) { /* leave user where they are */ }
