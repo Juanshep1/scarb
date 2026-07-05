@@ -54,31 +54,84 @@ VERSION = "0.1"
 def env(name, default=""):
     return os.environ.get(name, default)
 
-CONFIG = {
-    "provider": env("SCARB_PROVIDER", "ollama"),
-    "api_key": env("SCARB_API_KEY", ""),
-    "model": env("SCARB_MODEL", ""),
-    "base_url": env("SCARB_BASE_URL", ""),
-    "local_model": env("SCARB_LOCAL_MODEL", "llama3.1"),
-    "local_base_url": env("SCARB_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1"),
-    "token": env("SCARB_TOKEN", ""),
-    "port": int(env("SCARB_PORT", "8787")),
-    "host": env("SCARB_HOST", "0.0.0.0"),
-}
+CONFIG_PATH = os.path.join(HERE, "config.json")
+
+PROVIDERS = ["anthropic", "openrouter", "openai", "ollama-cloud", "ollama"]
 
 DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-6",
     "openai": "gpt-4o",
     "openrouter": "anthropic/claude-sonnet-4.6",
-    "ollama": CONFIG["local_model"],
+    "ollama-cloud": "gpt-oss:120b",
 }
 
 DEFAULT_BASE = {
     "anthropic": "https://api.anthropic.com/v1",
     "openai": "https://api.openai.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
-    "ollama": CONFIG["local_base_url"],
+    "ollama-cloud": "https://ollama.com/v1",
 }
+
+# Fields the UI can edit and that we persist to config.json. token/port/host
+# stay environment-only, so nobody can weaken the auth from the browser. Keys
+# and models are kept PER PROVIDER so switching providers never sends one
+# service's key to another.
+UI_FIELDS = ("provider", "keys", "models", "local_model", "local_base_url")
+
+
+def _load_saved():
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+_SAVED = _load_saved()
+
+
+def _migrate(saved):
+    """Fold an older single-key config into the per-provider maps."""
+    keys = dict(saved.get("keys") or {})
+    models = dict(saved.get("models") or {})
+    prov = saved.get("provider") or env("SCARB_PROVIDER", "ollama")
+    if saved.get("api_key") and prov not in keys:
+        keys[prov] = saved["api_key"]
+    if saved.get("model") and prov not in models:
+        models[prov] = saved["model"]
+    # seed a cloud key from the environment if one is set and unclaimed
+    envkey = env("SCARB_API_KEY", "")
+    if envkey and prov != "ollama" and prov not in keys:
+        keys[prov] = envkey
+    return keys, models
+
+_KEYS, _MODELS = _migrate(_SAVED)
+
+CONFIG = {
+    "provider": _SAVED.get("provider") or env("SCARB_PROVIDER", "ollama"),
+    "keys": _KEYS,       # {provider: api_key}
+    "models": _MODELS,   # {provider: model_id}
+    "local_model": _SAVED.get("local_model") or env("SCARB_LOCAL_MODEL", "llama3.1"),
+    "local_base_url": _SAVED.get("local_base_url") or env("SCARB_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1"),
+    "token": env("SCARB_TOKEN", ""),
+    "port": int(env("SCARB_PORT", "8787")),
+    "host": env("SCARB_HOST", "0.0.0.0"),
+}
+
+
+def save_config():
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            json.dump({k: CONFIG[k] for k in UI_FIELDS}, f, indent=2)
+    except Exception as e:
+        BUS.emit("log", text=f"could not save config: {e}")
+
+
+def key_for(provider):
+    return CONFIG["keys"].get(provider, "")
+
+
+def model_for(provider):
+    return CONFIG["models"].get(provider) or DEFAULT_MODELS.get(provider, "")
 
 
 def provider_for(kind):
@@ -86,9 +139,29 @@ def provider_for(kind):
     if kind == "local":
         return ("ollama", CONFIG["local_model"], CONFIG["local_base_url"], "")
     p = CONFIG["provider"]
-    model = CONFIG["model"] or DEFAULT_MODELS.get(p, "")
-    base = CONFIG["base_url"] or DEFAULT_BASE.get(p, "")
-    return (p, model, base, CONFIG["api_key"])
+    if p == "ollama":
+        return ("ollama", model_for("ollama") or CONFIG["local_model"],
+                CONFIG["local_base_url"], "")
+    model = model_for(p)
+    base = DEFAULT_BASE.get(p, "")
+    return (p, model, base, key_for(p))
+
+
+def ollama_host():
+    """The Ollama root URL (its native /api lives there, not under /v1)."""
+    base = CONFIG["local_base_url"].rstrip("/")
+    return base[:-3].rstrip("/") if base.endswith("/v1") else base
+
+
+def list_ollama_models():
+    """Ask a local Ollama what models are installed. Empty list if it's not running."""
+    try:
+        req = urllib.request.Request(ollama_host() + "/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        return [m["name"] for m in data.get("models", [])]
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +683,27 @@ class Handler(BaseHTTPRequestHandler):
                 "local_model": CONFIG["local_model"],
                 "busy": BUSY.is_set(),
             })
+        if path == "/api/config":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            p = CONFIG["provider"]
+            return self._send(200, {
+                "provider": p,
+                "model": model_for(p) if p != "ollama" else (model_for("ollama") or CONFIG["local_model"]),
+                "local_model": CONFIG["local_model"],
+                "local_base_url": CONFIG["local_base_url"],
+                "has_key": bool(key_for(p)),
+                "keys_present": {prov: bool(key_for(prov)) for prov in PROVIDERS},
+                "models": dict(CONFIG["models"]),
+                "default_models": DEFAULT_MODELS,
+                "providers": PROVIDERS,
+            })
+        if path == "/api/ollama":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            models = list_ollama_models()
+            return self._send(200, {"running": bool(models), "models": models,
+                                    "host": ollama_host()})
         if path == "/events":
             return self._serve_events()
         return self._send(404, {"error": "not found"})
@@ -644,6 +738,37 @@ class Handler(BaseHTTPRequestHandler):
                 HISTORY.clear()
             BUS.emit("reset")
             return self._send(200, {"ok": True})
+        if path == "/api/config":
+            # Which provider these edits apply to (defaults to the active one).
+            if "provider" in body and str(body["provider"]).strip():
+                CONFIG["provider"] = str(body["provider"]).strip()
+            p = CONFIG["provider"]
+            # Keys and models are stored per provider, so they never clash.
+            if "api_key" in body and str(body["api_key"]).strip():
+                CONFIG["keys"][p] = str(body["api_key"]).strip()
+            if body.get("clear_key"):
+                CONFIG["keys"].pop(p, None)
+            if "model" in body:
+                m = str(body["model"]).strip()
+                if m:
+                    CONFIG["models"][p] = m
+                else:
+                    CONFIG["models"].pop(p, None)
+            for k in ("local_model", "local_base_url"):
+                if k in body and str(body[k]).strip():
+                    CONFIG[k] = str(body[k]).strip()
+            save_config()
+            BUS.emit("config", provider=CONFIG["provider"], model=provider_for("cloud")[1])
+            return self._send(200, {"ok": True, "model": provider_for("cloud")[1]})
+        if path == "/api/test_model":
+            kind = "local" if body.get("local") else "cloud"
+            try:
+                reply = llm_chat("You are a connectivity check. Reply with the single word: ok.",
+                                 [{"role": "user", "content": "say ok"}], kind=kind, max_tokens=16)
+                return self._send(200, {"ok": True, "reply": reply.strip()[:80],
+                                        "model": provider_for(kind)[1]})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": str(e)[:300]})
         return self._send(404, {"error": "not found"})
 
     def _serve_file(self, name, ctype):

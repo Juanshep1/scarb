@@ -66,8 +66,39 @@
   <aside class="side">
     <div class="tabs">
       <button data-tab="skills" class="active">Skills</button>
+      <button data-tab="setup">Setup</button>
       <button data-tab="identity">Identity</button>
       <button data-tab="soul">Soul</button>
+    </div>
+    <div class="panel hidden" id="panel-setup">
+      <div class="setup-block">
+        <div class="setup-h">🌿 Local model — zero setup</div>
+        <p class="setup-p">Run a model on this machine with <a href="https://ollama.com" target="_blank">Ollama</a>. Free, private, offline.</p>
+        <button class="btn-primary" id="detectOllama">Detect Ollama</button>
+        <div id="ollamaState" class="setup-note"></div>
+        <div id="ollamaModels" class="model-chips"></div>
+      </div>
+
+      <div class="setup-block">
+        <div class="setup-h">☁️ Cloud model</div>
+        <label class="setup-label">Provider</label>
+        <select id="cfgProvider">
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openrouter">OpenRouter (any model)</option>
+          <option value="openai">OpenAI</option>
+          <option value="ollama-cloud">Ollama Cloud</option>
+          <option value="ollama">Ollama (local)</option>
+        </select>
+        <label class="setup-label">API key <span id="keyState" class="setup-note"></span></label>
+        <input id="cfgKey" type="password" placeholder="paste your key" autocomplete="off">
+        <label class="setup-label">Model <span class="setup-note" id="modelHint"></span></label>
+        <input id="cfgModel" type="text" placeholder="leave blank for the default" autocomplete="off">
+        <div class="setup-row">
+          <button class="btn-primary" id="cfgSave">Save</button>
+          <button class="btn-ghost" id="cfgTest">Test connection</button>
+        </div>
+        <div id="testResult" class="setup-note"></div>
+      </div>
     </div>
     <div class="panel" id="panel-skills">
       <div class="count" id="skillCount">— skills</div>

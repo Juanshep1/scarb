@@ -101,6 +101,7 @@ function handle(ev) {
       break;
     case "skill": onSkillEvent(ev); break;
     case "doc": refreshDocs(); break;
+    case "config": $("subtitle").textContent = (ev.provider || "") + " · " + (ev.model || ""); break;
     case "reset": stream.innerHTML = ""; break;
     case "log": break;
   }
@@ -159,14 +160,109 @@ document.querySelectorAll(".doc-save").forEach((b) => {
 });
 
 // ---- tabs ----------------------------------------------------------------
+const PANELS = ["skills", "setup", "identity", "soul"];
 document.querySelectorAll(".tabs button").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
-    ["skills", "identity", "soul"].forEach((t) =>
-      $("panel-" + t).classList.toggle("hidden", t !== b.dataset.tab));
+    PANELS.forEach((t) => $("panel-" + t).classList.toggle("hidden", t !== b.dataset.tab));
+    if (b.dataset.tab === "setup") loadConfig();
   };
 });
+
+// ---- setup / model config ------------------------------------------------
+// Keys and models are stored PER PROVIDER, so switching providers in the form
+// shows that provider's own saved key/model — they never clash.
+const DEFAULT_MODELS = {};
+let KEYS_PRESENT = {};
+let SAVED_MODELS = {};
+
+async function loadConfig() {
+  const c = await api("/api/config");
+  Object.assign(DEFAULT_MODELS, c.default_models || {});
+  KEYS_PRESENT = c.keys_present || {};
+  SAVED_MODELS = c.models || {};
+  $("cfgProvider").value = c.provider;
+  reflectProvider();
+}
+
+function reflectProvider() {
+  const p = $("cfgProvider").value;
+  const isLocal = p === "ollama";
+  const hasKey = !!KEYS_PRESENT[p];
+  $("cfgModel").value = SAVED_MODELS[p] || "";
+  $("cfgKey").value = "";
+  $("cfgKey").disabled = isLocal;
+  $("cfgKey").parentElement.style.opacity = isLocal ? ".45" : "1";
+  $("cfgKey").placeholder = isLocal ? "not needed for local" :
+    (hasKey ? "•••••• (saved for " + p + " — blank keeps it)" : "paste your " + p + " key");
+  $("keyState").textContent = isLocal ? "" : (hasKey ? "✓ saved" : "not set");
+  $("keyState").className = "setup-note" + (isLocal ? "" : (hasKey ? " ok" : " bad"));
+  updateModelHint();
+}
+function updateModelHint() {
+  const p = $("cfgProvider").value;
+  const d = p === "ollama" ? "your local model" : (DEFAULT_MODELS[p] || "");
+  $("modelHint").textContent = d ? "default: " + d : "";
+}
+$("cfgProvider").onchange = reflectProvider;
+
+$("cfgSave").onclick = async () => {
+  const body = { provider: $("cfgProvider").value, model: $("cfgModel").value.trim() };
+  const key = $("cfgKey").value.trim();
+  if (key) body.api_key = key;
+  const btn = $("cfgSave"); btn.disabled = true; btn.textContent = "Saving…";
+  const r = await api("/api/config", "POST", body);
+  btn.textContent = "Saved ✓"; setTimeout(() => { btn.textContent = "Save"; btn.disabled = false; }, 1200);
+  $("subtitle").textContent = body.provider + " · " + (r.model || "");
+  loadConfig();
+};
+
+$("cfgTest").onclick = async () => {
+  const el = $("testResult"); el.textContent = "testing…"; el.className = "setup-note";
+  // save current form first so the test uses it
+  const body = { provider: $("cfgProvider").value, model: $("cfgModel").value.trim() };
+  const key = $("cfgKey").value.trim(); if (key) body.api_key = key;
+  await api("/api/config", "POST", body);
+  const r = await api("/api/test_model", "POST", {});
+  if (r.ok) { el.textContent = "✓ " + r.model + " replied: " + r.reply; el.className = "setup-note ok"; }
+  else { el.textContent = "✗ " + r.error; el.className = "setup-note bad"; }
+};
+
+let ollamaModels = [];
+$("detectOllama").onclick = async () => {
+  const btn = $("detectOllama"); btn.disabled = true; btn.textContent = "Looking…";
+  const r = await api("/api/ollama");
+  btn.disabled = false; btn.textContent = "Detect Ollama";
+  const state = $("ollamaState");
+  if (!r.running) {
+    state.className = "setup-note bad";
+    state.innerHTML = "Ollama isn't running. Install it, then run <code>ollama pull llama3.1</code> and try again.";
+    $("ollamaModels").innerHTML = ""; return;
+  }
+  state.className = "setup-note ok";
+  state.textContent = "Ollama is running at " + r.host + " — tap a model to use it:";
+  ollamaModels = r.models;
+  renderOllamaModels();
+};
+
+function renderOllamaModels() {
+  const box = $("ollamaModels"); box.innerHTML = "";
+  const current = $("cfgProvider").value === "ollama" ? $("cfgModel").value : "";
+  ollamaModels.forEach((m) => {
+    const b = document.createElement("button");
+    b.className = "model-chip" + (m === current ? " active" : "");
+    b.textContent = m;
+    b.onclick = async () => {
+      await api("/api/config", "POST", { provider: "ollama", model: m });
+      $("subtitle").textContent = "ollama · " + m;
+      await loadConfig();
+      renderOllamaModels();
+      $("testResult").textContent = "";
+    };
+    box.appendChild(b);
+  });
+}
 document.querySelectorAll(".mobtabs button").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll(".mobtabs button").forEach((x) => x.classList.remove("active"));
@@ -213,6 +309,13 @@ async function boot() {
     $("subtitle").textContent = (state.provider || "") + " · " + (state.model || "");
     (state.history || []).forEach((m) => m.role === "user" ? addUser(m.content) : addScarb(m.content));
     connect();
+    // Deep-link: /#setup opens the model-setup panel straight away.
+    const tab = (location.hash || "").replace("#", "");
+    if (["setup", "identity", "soul", "skills"].includes(tab)) {
+      const btn = document.querySelector(`.tabs button[data-tab="${tab}"]`);
+      if (btn) btn.click();
+      if (window.innerWidth <= 820) $("app").classList.add("show-skills");
+    }
   } catch (e) { /* gate is showing */ }
 }
 boot();

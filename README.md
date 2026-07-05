@@ -23,10 +23,20 @@ python3 scarb.py
 
 Open the printed URL. That's it — no packages to install.
 
-### Point it at a model
+### Point it at a model — in the UI (easiest)
 
-SCARB defaults to a **local Ollama** model. To use a cloud model, set a few env
-vars (each is optional):
+Open the **Setup** tab in the side panel:
+
+- **Local model — zero setup:** tap **Detect Ollama** and pick an installed
+  model. One tap and you're running fully local, private, and offline.
+- **Cloud model:** choose a provider — **Anthropic, OpenRouter, OpenAI, or
+  Ollama Cloud** — paste its API key, and Save. **Test connection** checks it.
+  Each provider keeps its **own** key and model, so switching providers never
+  mixes them up. Keys are stored in `config.json` (gitignored) on your machine.
+
+### …or with environment variables
+
+SCARB defaults to a **local Ollama** model. You can also set everything up front:
 
 ```bash
 # Cloud (pick one provider)
