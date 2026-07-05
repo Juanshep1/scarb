@@ -1,0 +1,31 @@
+# XcodeGen spec for the SCARB iOS app.
+#   brew install xcodegen   (if needed)
+#   cd app/ios && xcodegen generate && open SCARB.xcodeproj
+# then pick a simulator or your iPhone and press Run.
+name: SCARB
+options:
+  bundleIdPrefix: com.juanshep
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  SCARB:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+        optional: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.juanshep.scarb
+        PRODUCT_NAME: SCARB
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"

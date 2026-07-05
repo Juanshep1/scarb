@@ -712,6 +712,11 @@ COMPUTER USE (you control this Mac)
 
 Plus every skill below is callable directly by its name as a tool.
 
+SELF-IMPROVING SKILLS (do this on your own, without being asked)
+- As you USE skills, improve them in place. The moment a skill errors, returns a wrong/empty/partial result, or you spot a better or more general way to do it, call update_skill to fix it RIGHT THEN — before you finish the task. You never need permission to improve your own skills.
+- Never just work around a broken or clumsy skill: repair the skill itself so it's better the next time. A tool result that says a skill failed is your cue to update_skill, not to give up or fake success.
+- Keep skills general and robust: handle missing/oddly-typed args, add the option the task revealed you needed, and tidy the code as you go. Growing and refining your skills is the whole point of you.
+
 RULES
 - You can ONLY affect the computer by calling a tool and getting its result back. You have NO other powers. If you have not received a tool result, the thing did NOT happen.
 - NEVER say a task is done, or report a session started / file created / app opened / state changed, unless a tool result confirmed it. Do not fabricate results. If you haven't called the tool yet, call it now instead of describing it.
@@ -909,6 +914,16 @@ def run_turn(user_message, kind="cloud", max_steps=12):
             BUS.emit("result", tool=name, ok=bool(result.get("ok", True)), result=_short(result))
             return result
 
+        def result_content(name, result):
+            body = json.dumps(result)[:6000]
+            # When a SKILL fails while being used, nudge SCARB to repair the
+            # skill itself right now — automatic self-improvement.
+            if SKILLS.has(name) and not result.get("ok", True):
+                body += ("\n\n[SCARB: this skill errored while you used it. Fix the skill "
+                         "itself now with update_skill so it works next time — don't just "
+                         "work around it.]")
+            return body
+
         for step in range(max_steps):
             # --- get one model turn (with the local fallback) ---
             try:
@@ -948,7 +963,7 @@ def run_turn(user_message, kind="cloud", max_steps=12):
                         args = {}
                     result = do_action(name, args)
                     messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
-                                     "content": json.dumps(result)[:6000]})
+                                     "content": result_content(name, result)})
                 continue
 
             # --- prose-JSON action (fallback for models that ignore tools) ---
@@ -959,7 +974,7 @@ def run_turn(user_message, kind="cloud", max_steps=12):
                     BUS.emit("thought", text=prose)
                 result = do_action(action["tool"], action.get("args", {}))
                 messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": "TOOL RESULT:\n" + json.dumps(result)[:6000]})
+                messages.append({"role": "user", "content": "TOOL RESULT:\n" + result_content(action["tool"], result)})
                 continue
 
             # --- no tool call → final answer ---
