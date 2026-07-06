@@ -1,5 +1,5 @@
 # name: computer
-# description: See and control this Mac. ALWAYS {"action":"see"} FIRST to get the real list of on-screen buttons/menus/fields (by name) before clicking — don't guess. Then: {"action":"click","target":"Save"} clicks an element by name; {"action":"click","x":120,"y":340} clicks a screen point; {"action":"menu","path":["File","New Window"]} clicks a menu; {"action":"focus","app":"Safari"} brings an app front; {"action":"apps"} lists running apps; {"action":"type","text":"hi"} types; {"action":"key","keys":"cmd+s"} presses a shortcut; {"action":"screenshot"} saves the screen. Needs macOS Accessibility permission for the app running SCARB.
+# description: See and control this Mac. ALWAYS {"action":"see"} FIRST to get the real on-screen buttons/menus/fields/links (by name, with coordinates) before clicking — don't guess. Then {"action":"click","target":"<exact or partial name>"} clicks that element's real coordinate (works on web videos & links; add "double":1 to double-click). Or {"action":"click","x":120,"y":340} for a raw point. Also: {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"type","text":"hi"}, {"action":"key","keys":"cmd+s"}, {"action":"screenshot"}. Needs macOS Accessibility permission for the app running SCARB.
 import subprocess
 import os
 import ctypes
@@ -53,7 +53,7 @@ def _see(args):
                   set nm to (value of el as string)
                 end try
               end if
-              if (r is in {{"button", "menu button", "pop up button", "checkbox", "radio button", "tab", "text field", "text area", "link", "menu item"}}) and nm is not "" then
+              if (r is in {{"button", "menu button", "pop up button", "checkbox", "radio button", "tab", "text field", "text area", "link", "menu item", "image"}}) and nm is not "" and nm is not "missing value" then
                 set p to (position of el)
                 set report to report & r & ": \\"" & nm & "\\" @ " & (item 1 of p) & "," & (item 2 of p) & linefeed
               end if
@@ -64,48 +64,71 @@ def _see(args):
     end tell
     return report
     '''
-    ok, out = _osa(script, timeout=30)
+    ok, out = _osa(script, timeout=45)
     if not ok:
         return {"ok": False, "error": out or "couldn't read the screen (Accessibility permission?)"}
-    lines = [l for l in out.splitlines() if l.strip()][:120]
-    return {"ok": True, "result": {"app": app, "elements": lines}}
+    lines = [l for l in out.splitlines() if l.strip() and '"missing value"' not in l][:200]
+    return {"ok": True, "result": {"app": app, "elements": lines,
+                                   "hint": "to click one, use {\"action\":\"click\",\"target\":\"<its name>\"} — it clicks the real coordinate, which works on web videos/links. Add \"double\":1 for a double-click."}}
 
 
 # ---- CLICK: by element name (robust) or by coordinate ----------------------
 
 def _click(args):
     if "x" in args and "y" in args:
-        return _click_point(int(args["x"]), int(args["y"]))
+        return _click_point(float(args["x"]), float(args["y"]), int(args.get("double", 0)))
     target = str(args.get("target", "")).strip()
     if not target:
         return {"ok": False, "error": "click needs a target name, or x and y"}
     app = _frontmost()
+    # Find the element and return its GEOMETRY. We then click its center with a
+    # real CoreGraphics mouse event — which web content (video thumbnails,
+    # links, players) actually responds to, unlike an accessibility "click".
     script = f'''
-    tell application "System Events"
-      tell process "{_q(app)}"
-        set hits to {{}}
+    tell application "System Events" to tell process "{_q(app)}"
+      set hits to {{}}
+      try
+        set hits to (every UI element of (entire contents of window 1) whose name is "{_q(target)}")
+      end try
+      if hits is {{}} then
         try
-          set hits to (every UI element of (entire contents of window 1) whose name is "{_q(target)}")
+          set hits to (every UI element of (entire contents of window 1) whose name contains "{_q(target)}")
         end try
-        if hits is {{}} then
-          try
-            set hits to (every UI element of (entire contents of window 1) whose name contains "{_q(target)}")
-          end try
-        end if
-        if hits is {{}} then error "no on-screen element named " & "{_q(target)}"
-        click (item 1 of hits)
-      end tell
+      end if
+      if hits is {{}} then
+        try
+          set hits to (every UI element of (entire contents of window 1) whose value is "{_q(target)}")
+        end try
+      end if
+      if hits is {{}} then error "no on-screen element named " & "{_q(target)}"
+      set el to item 1 of hits
+      set p to position of el
+      set s to size of el
+      return ((item 1 of p) as integer) & "," & ((item 2 of p) as integer) & "," & ((item 1 of s) as integer) & "," & ((item 2 of s) as integer)
     end tell
-    return "clicked"
     '''
-    ok, out = _osa(script)
+    ok, out = _osa(script, timeout=45)
     if not ok:
         return {"ok": False, "error": out + " — run action 'see' first to get exact names."}
-    return {"ok": True, "result": f"clicked '{target}'"}
+    try:
+        x, y, w, h = [int(v) for v in out.split(",")[:4]]
+        cx, cy = x + w // 2, y + h // 2
+    except Exception:
+        # No geometry — fall back to an accessibility click.
+        ok2, out2 = _osa(f'tell application "System Events" to tell process "{_q(app)}" to '
+                         f'click (first UI element of (entire contents of window 1) whose name contains "{_q(target)}")')
+        return ({"ok": True, "result": f"clicked '{target}'"} if ok2 else {"ok": False, "error": out2})
+    res = _click_point(cx, cy, int(args.get("double", 0)))
+    if res.get("ok"):
+        res["result"] = f"clicked '{target}' at {cx},{cy}"
+    return res
 
 
-def _click_point(x, y):
-    # CoreGraphics mouse events — no dependencies, works on any Mac.
+def _click_point(x, y, double=0):
+    # CoreGraphics mouse events — no dependencies, works on any Mac, and web
+    # pages treat these as real clicks. We move, then press/release; for a
+    # double-click we set the click-state so players/thumbnails that need it work.
+    import time
     try:
         cg = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
 
@@ -114,14 +137,26 @@ def _click_point(x, y):
 
         cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
         cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
+        cg.CGEventSetIntegerValueField.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64]
         cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
         cg.CFRelease.argtypes = [ctypes.c_void_p]
         pt = CGPoint(float(x), float(y))
-        for etype in (5, 1, 2):   # mouseMoved, leftMouseDown, leftMouseUp
+        CLICK_STATE = 1   # kCGMouseEventClickState
+
+        def post(etype, clicks=1):
             ev = cg.CGEventCreateMouseEvent(None, etype, pt, 0)
+            if clicks > 1:
+                cg.CGEventSetIntegerValueField(ev, CLICK_STATE, clicks)
             cg.CGEventPost(0, ev)
             cg.CFRelease(ev)
-        return {"ok": True, "result": f"clicked at {x},{y}"}
+
+        post(5)                    # mouseMoved
+        time.sleep(0.03)
+        post(1); post(2)           # down, up  (a real single click)
+        if double:
+            time.sleep(0.05)
+            post(1, 2); post(2, 2)  # second click of a double-click
+        return {"ok": True, "result": f"clicked at {int(x)},{int(y)}"}
     except Exception as e:
         return {"ok": False, "error": f"coordinate click failed: {e}"}
 
