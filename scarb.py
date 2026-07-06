@@ -751,11 +751,11 @@ CORE TOOLS
 - read_self {"file"} — read your own scarb.py / identity.md / soul.md, to improve yourself.
 
 COMPUTER USE (you control this Mac)
-- applescript {"script"} — run AppleScript: open/quit/arrange apps, click buttons & menu items, type, read on-screen UI via System Events. This is your main way to drive the desktop.
+- **`computer` skill — use this to see and click.** You CANNOT see the screen by intuition. To click or interact with anything, FIRST call `computer` with {"action":"see"} to get the REAL list of on-screen buttons, menus, and fields BY NAME (and their coordinates). Then click the exact name you saw: {"action":"click","target":"<exact name>"}. Other actions: {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"type","text":"…"}, {"action":"key","keys":"cmd+s"}, {"action":"click","x":120,"y":340} (only if there's no named element), {"action":"screenshot"}. NEVER guess a name or coordinate — see first. If a click fails, `see` again to get the current names, and improve the `computer` skill (update_skill) if it's the skill that's wrong.
+- applescript {"script"} — raw AppleScript, for anything the `computer` skill doesn't cover.
 - open_app {"name"} or {"url"} — launch an app or open a URL/file.
-- type_text {"text"} — type into the frontmost app.
-- screenshot {} — capture the screen to memory/screen.png (a vision model can then read_file it).
-(First use may need macOS Accessibility / Screen-Recording permission for the app running SCARB.)
+- type_text {"text"} / screenshot {} — lower-level helpers.
+(First use may need macOS Accessibility / Screen-Recording permission for the app running SCARB — if `see` returns a permission error, tell the human to grant it.)
 
 Plus every skill below is callable directly by its name as a tool.
 

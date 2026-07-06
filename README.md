@@ -92,11 +92,15 @@ and continues until the task is actually done. Its tools are:
   same problem from scratch twice. **You watch this happen live in the Skills
   panel.**
 - **`read_file` / `write_file` / `run_shell`** — touch the real machine.
-- **Computer use** (macOS) — `applescript` (open/quit/arrange apps, click
-  buttons and menus, type, read on-screen UI), `open_app`, `type_text`, and
-  `screenshot`. SCARB can drive your actual desktop, and build more computer-use
-  skills on top of these. (First use may need Accessibility / Screen-Recording
-  permission for the app running SCARB.)
+- **Computer use** (macOS) — the `computer` skill gives SCARB real eyes: it
+  reads the on-screen buttons, menus, and fields **by name** via the macOS
+  Accessibility API (`{"action":"see"}`), then clicks them reliably
+  (`{"action":"click","target":"Save"}`), works the menu bar, focuses apps,
+  types, and presses shortcuts — plus coordinate clicks via CoreGraphics when
+  there's no named element. It sees before it clicks instead of guessing, and
+  it's an ordinary skill, so it improves itself when it hits a wall. (Lower-level
+  `applescript` / `open_app` / `screenshot` tools are still there. First use may
+  need Accessibility / Screen-Recording permission for the app running SCARB.)
 - **`read_self`** — read its own `scarb.py`, `identity.md`, or `soul.md`, so it
   can improve itself and fix its own code.
 
