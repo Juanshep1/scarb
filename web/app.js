@@ -100,7 +100,7 @@ function handle(ev) {
     case "result":
       addStep("result" + (ev.ok ? "" : " bad"), ev.ok ? "result" : "failed",
         esc(ev.tool), typeof ev.result === "string" ? ev.result : JSON.stringify(ev.result)); break;
-    case "assistant": addScarb(ev.text); break;
+    case "assistant": addScarb(ev.text); speak(ev.text); break;
     case "error": addStep("error", "error", esc(ev.text)); break;
     case "status":
       setStatus(ev.text, ev.text !== "idle");
@@ -287,7 +287,54 @@ async function loadConfig() {
   SAVED_MODELS = c.models || {};
   $("cfgProvider").value = c.provider;
   reflectProvider();
+  // voice / elevenlabs
+  $("elevenKey").value = "";
+  $("elevenKey").placeholder = c.has_eleven ? "•••••• (saved — blank keeps it)" : "optional — blank uses the free voice";
+  $("elevenState").textContent = c.has_eleven ? "✓ saved" : "using free voice";
+  $("elevenState").className = "setup-note" + (c.has_eleven ? " ok" : "");
+  populateVoices(voiceCache.length ? voiceCache : (c.eleven_voice ? [{ id: c.eleven_voice, name: "saved voice" }] : []), c.eleven_voice);
+  if (c.has_eleven && !voiceCache.length) fetchVoices(c.eleven_voice);
 }
+
+let voiceCache = [];
+function populateVoices(list, selected) {
+  const sel = $("elevenVoice"); sel.innerHTML = "";
+  const opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "Rachel (default)"; sel.appendChild(opt0);
+  list.forEach((v) => {
+    const o = document.createElement("option"); o.value = v.id; o.textContent = v.name;
+    if (v.id === selected) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (selected && ![...sel.options].some(o => o.value === selected)) {
+    const o = document.createElement("option"); o.value = selected; o.textContent = selected; o.selected = true; sel.appendChild(o);
+  }
+}
+async function fetchVoices(selected) {
+  const r = await api("/api/voices");
+  if (r.voices && r.voices.length) { voiceCache = r.voices; populateVoices(r.voices, selected || $("elevenVoice").value); }
+}
+$("refreshVoices").onclick = async () => {
+  const key = $("elevenKey").value.trim();
+  if (key) await api("/api/config", "POST", { eleven_key: key });
+  fetchVoices();
+};
+$("voiceSave").onclick = async () => {
+  const body = { eleven_voice: $("elevenVoice").value };
+  const key = $("elevenKey").value.trim(); if (key) body.eleven_key = key;
+  const b = $("voiceSave"); b.textContent = "Saving…";
+  await api("/api/config", "POST", body);
+  b.textContent = "Saved ✓"; setTimeout(() => b.textContent = "Save", 1200);
+  loadConfig();
+};
+$("voiceTest").onclick = async () => {
+  const key = $("elevenKey").value.trim();
+  if (key) await api("/api/config", "POST", { eleven_key: key, eleven_voice: $("elevenVoice").value });
+  $("voiceResult").textContent = "playing…"; $("voiceResult").className = "setup-note";
+  const prev = VOICE_OUT; VOICE_OUT = true;
+  await speak("Hello — this is SCARB. Your voice is set up.");
+  VOICE_OUT = prev;
+  $("voiceResult").textContent = "";
+};
 
 function reflectProvider() {
   const p = $("cfgProvider").value;
@@ -465,6 +512,110 @@ document.querySelectorAll("#chips .chip").forEach((c) => {
   c.onclick = () => { input.value = c.textContent; send(); };
 });
 
+// ---- voice: talking to SCARB (mic) and SCARB talking back (TTS) ----------
+const micBtn = $("micBtn");
+let listening = false, recog = null;
+
+// In the native app a message handler named "mic" exists; use it so the app's
+// native speech recognition drives the same button. In a browser, use the
+// built-in Web Speech API. The native side calls window.scarbVoiceInput(text).
+const nativeMic = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mic);
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+window.scarbSetInput = (text) => {            // live partial transcript (native)
+  input.value = (text || "").trimStart();
+  autoGrow();
+};
+window.scarbVoiceInput = (text) => {          // final transcript → send (native)
+  input.value = (text || "").trim();
+  autoGrow();
+  if (input.value) send();
+};
+window.scarbSetListening = (on) => { listening = !!on; micBtn.classList.toggle("on", listening); };
+
+function autoGrow() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; }
+
+micBtn.onclick = () => {
+  if (nativeMic) {
+    window.webkit.messageHandlers.mic.postMessage(listening ? "stop" : "start");
+    return;
+  }
+  if (!SR) { addStep("error", "voice", "This browser can't do speech input — try Safari or Chrome."); return; }
+  if (listening) { recog && recog.stop(); return; }
+  recog = new SR();
+  recog.lang = "en-US"; recog.interimResults = true; recog.continuous = false;
+  const base = input.value ? input.value + " " : "";
+  recog.onresult = (e) => {
+    let s = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) s += e.results[i][0].transcript;
+    input.value = (base + s).trimStart(); autoGrow();
+  };
+  recog.onend = () => { listening = false; micBtn.classList.remove("on"); if (input.value.trim()) send(); };
+  recog.onerror = () => { listening = false; micBtn.classList.remove("on"); };
+  listening = true; micBtn.classList.add("on"); recog.start();
+};
+
+// ---- SCARB speaks its replies --------------------------------------------
+let VOICE_OUT = localStorage.getItem("scarb_voice") === "1";
+let currentAudio = null;
+function setVoiceOut(on) {
+  VOICE_OUT = on;
+  localStorage.setItem("scarb_voice", on ? "1" : "0");
+  $("voiceBtn").textContent = on ? "🔊" : "🔈";
+  $("voiceBtn").classList.toggle("on", on);
+  if (!on) stopSpeaking();
+}
+$("voiceBtn").onclick = () => setVoiceOut(!VOICE_OUT);
+
+function cleanForSpeech(t) {
+  return (t || "")
+    .replace(/```[\s\S]*?```/g, " (code) ")
+    .replace(/[*_#`>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim().slice(0, 1200);
+}
+
+async function speak(text) {
+  if (!VOICE_OUT) return;
+  const clean = cleanForSpeech(text);
+  if (!clean) return;
+  stopSpeaking();
+  // Prefer ElevenLabs (if a key is set on the server); otherwise the OS voice.
+  try {
+    const res = await fetch("/api/tts", { method: "POST", headers: headers(), body: JSON.stringify({ text: clean }) });
+    const type = res.headers.get("content-type") || "";
+    if (res.status === 200 && type.includes("audio")) {
+      const buf = await res.arrayBuffer();
+      const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
+      currentAudio = new Audio(url);
+      currentAudio.play().catch(() => speakLocal(clean));
+      return;
+    }
+  } catch (e) { /* fall through to local voice */ }
+  speakLocal(clean);
+}
+
+function speakLocal(text) {
+  if (!window.speechSynthesis) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.03; u.pitch = 1.0;
+  const pick = () => {
+    const vs = speechSynthesis.getVoices();
+    // prefer the natural / neural Apple & Google voices
+    return vs.find(v => /(Ava|Samantha|Zoe|Allison|Siri|Natural|Neural|Google US English)/i.test(v.name))
+        || vs.find(v => v.lang && v.lang.startsWith("en")) || vs[0];
+  };
+  const v = pick();
+  if (v) u.voice = v;
+  speechSynthesis.speak(u);
+}
+function stopSpeaking() {
+  if (window.speechSynthesis) speechSynthesis.cancel();
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+}
+// some browsers load voices async
+if (window.speechSynthesis) speechSynthesis.onvoiceschanged = () => {};
+
 // ---- boot ----------------------------------------------------------------
 async function boot() {
   // Ask (without auth) whether a token is even needed; only gate if it is.
@@ -480,6 +631,7 @@ async function boot() {
     $("subtitle").textContent = (state.provider || "") + " · " + (state.model || "");
     (state.history || []).forEach((m) => m.role === "user" ? addUser(m.content) : addScarb(m.content));
     setMolt(state.molt);
+    setVoiceOut(VOICE_OUT);
     BOOT_T = Date.now() / 1000;
     connect();
     // Deep-link: /#setup opens the model-setup panel straight away.

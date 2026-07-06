@@ -77,7 +77,8 @@ DEFAULT_BASE = {
 # stay environment-only, so nobody can weaken the auth from the browser. Keys
 # and models are kept PER PROVIDER so switching providers never sends one
 # service's key to another.
-UI_FIELDS = ("provider", "keys", "models", "local_model", "local_base_url", "molt")
+UI_FIELDS = ("provider", "keys", "models", "local_model", "local_base_url", "molt",
+             "eleven_key", "eleven_voice")
 
 
 def _load_saved():
@@ -115,6 +116,8 @@ CONFIG = {
     "local_base_url": _SAVED.get("local_base_url") or env("SCARB_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1"),
     "molt": _SAVED.get("molt", False),
     "molt_interval": int(env("SCARB_MOLT_INTERVAL", "1200")),
+    "eleven_key": _SAVED.get("eleven_key", env("ELEVENLABS_API_KEY", "")),
+    "eleven_voice": _SAVED.get("eleven_voice", ""),
     "token": env("SCARB_TOKEN", ""),
     "port": int(env("SCARB_PORT", "8787")),
     "host": env("SCARB_HOST", "0.0.0.0"),
@@ -353,6 +356,48 @@ def tool_specs():
             "name": s["name"], "description": s["description"][:1000],
             "parameters": {"type": "object", "additionalProperties": True}}})
     return specs
+
+
+# ---- voice: ElevenLabs text-to-speech (optional; free OS voice otherwise) --
+
+# A "premade" voice that free ElevenLabs plans can synthesize via the API
+# (shared "library" voices require a paid plan). "Sarah" — warm and natural.
+ELEVEN_DEFAULT_VOICE = "EXAVITQu4vr4xnSDxMaL"
+
+
+def elevenlabs_tts(text):
+    """Return MP3 bytes for `text`, or None if no key / it fails (client then
+    falls back to the browser's built-in voice)."""
+    key = CONFIG.get("eleven_key", "")
+    if not key or not text.strip():
+        return None
+    voice = CONFIG.get("eleven_voice") or ELEVEN_DEFAULT_VOICE
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}"
+    payload = {"text": text[:1500], "model_id": "eleven_turbo_v2_5",
+               "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                 headers={"xi-api-key": key, "content-type": "application/json",
+                                          "accept": "audio/mpeg"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+    except Exception as e:
+        BUS.emit("log", text=f"ElevenLabs TTS failed: {e}")
+        return None
+
+
+def elevenlabs_voices():
+    key = CONFIG.get("eleven_key", "")
+    if not key:
+        return []
+    req = urllib.request.Request("https://api.elevenlabs.io/v1/voices",
+                                 headers={"xi-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        return [{"id": v["voice_id"], "name": v["name"]} for v in data.get("voices", [])]
+    except Exception:
+        return []
 
 
 def friendly_error(err, kind):
@@ -1206,6 +1251,10 @@ class Handler(BaseHTTPRequestHandler):
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
             return self._send(200, {"evolution": EVOLUTION[-100:], "molt": bool(CONFIG.get("molt"))})
+        if path == "/api/voices":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            return self._send(200, {"voices": elevenlabs_voices()})
         if path == "/api/conversations":
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
@@ -1225,6 +1274,8 @@ class Handler(BaseHTTPRequestHandler):
                 "models": dict(CONFIG["models"]),
                 "default_models": DEFAULT_MODELS,
                 "providers": PROVIDERS,
+                "has_eleven": bool(CONFIG.get("eleven_key")),
+                "eleven_voice": CONFIG.get("eleven_voice", ""),
             })
         if path == "/api/ollama":
             if not authed(self):
@@ -1263,6 +1314,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "empty message"})
             threading.Thread(target=run_turn, args=(message, kind), daemon=True).start()
             return self._send(200, {"ok": True})
+        if path == "/api/tts":
+            # Speak text with ElevenLabs if a key is set; else 204 → the client
+            # uses the browser's free built-in voice.
+            audio = elevenlabs_tts(str(body.get("text", "")))
+            if audio:
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("Content-Length", str(len(audio)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(audio)
+                return
+            return self._send(204, b"")
         if path == "/api/molt":
             # Toggle metamorphosis, and/or molt right now so you can watch it.
             if "enabled" in body:
@@ -1329,6 +1393,12 @@ class Handler(BaseHTTPRequestHandler):
             for k in ("local_model", "local_base_url"):
                 if k in body and str(body[k]).strip():
                     CONFIG[k] = str(body[k]).strip()
+            if "eleven_key" in body and str(body["eleven_key"]).strip():
+                CONFIG["eleven_key"] = str(body["eleven_key"]).strip()
+            if body.get("clear_eleven"):
+                CONFIG["eleven_key"] = ""
+            if "eleven_voice" in body:
+                CONFIG["eleven_voice"] = str(body["eleven_voice"]).strip()
             save_config()
             BUS.emit("config", provider=CONFIG["provider"], model=provider_for("cloud")[1])
             return self._send(200, {"ok": True, "model": provider_for("cloud")[1]})

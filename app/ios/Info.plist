@@ -44,6 +44,10 @@
     <string>Dark</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>SCARB connects to the SCARB server running on your computer over your local network or Tailscale.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>SCARB uses the microphone so you can talk to it.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>SCARB transcribes your speech on device so you can talk to it instead of typing.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

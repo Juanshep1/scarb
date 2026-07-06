@@ -53,6 +53,7 @@
         <div class="subtitle" id="subtitle">self-improving assistant</div>
       </div>
       <div class="head-right">
+        <button class="iconbtn" id="voiceBtn" title="Read SCARB's replies aloud">🔈</button>
         <button class="iconbtn moltbtn" id="moltBtn" title="Metamorphosis — SCARB improves its own skills on its own">🦋</button>
         <button class="iconbtn" id="newChat" title="New conversation">＋</button>
         <span class="badge" id="statusBadge"><span class="dot"></span><span id="statusText">idle</span></span>
@@ -76,7 +77,8 @@
 
     <div class="composer">
       <label class="toggle" title="Run this turn on the local model"><input type="checkbox" id="localToggle">local</label>
-      <textarea id="input" rows="1" placeholder="Ask SCARB to do something…"></textarea>
+      <button class="mic" id="micBtn" title="Hold-free: tap to talk">🎤</button>
+      <textarea id="input" rows="1" placeholder="Ask SCARB, or tap 🎤 to talk…"></textarea>
       <button class="send" id="send">➤</button>
     </div>
   </div>
@@ -120,6 +122,23 @@
           <button class="btn-ghost" id="cfgTest">Test connection</button>
         </div>
         <div id="testResult" class="setup-note"></div>
+      </div>
+
+      <div class="setup-block">
+        <div class="setup-h">🔊 Voice</div>
+        <p class="setup-p">SCARB can read replies aloud and you can talk to it with the 🎤. The mic and a natural built-in voice are free. For a premium voice, add an <a href="https://elevenlabs.io" target="_blank">ElevenLabs</a> key.</p>
+        <label class="setup-label">ElevenLabs API key <span id="elevenState" class="setup-note"></span></label>
+        <input id="elevenKey" type="password" placeholder="optional — blank uses the free voice" autocomplete="off">
+        <label class="setup-label">Voice</label>
+        <div class="setup-row">
+          <select id="elevenVoice"></select>
+          <button class="btn-ghost btn-icon" id="refreshVoices" title="Load your ElevenLabs voices">⟳</button>
+        </div>
+        <div class="setup-row">
+          <button class="btn-primary" id="voiceSave">Save</button>
+          <button class="btn-ghost" id="voiceTest">Test voice</button>
+        </div>
+        <div id="voiceResult" class="setup-note"></div>
       </div>
     </div>
     <div class="panel" id="panel-skills">

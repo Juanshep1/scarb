@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		140C6A7224B6FE13C1FB4507 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBABF4759BC4344FFB005699 /* Voice.swift */; };
 		228CBA4A440620AAEDCBE972 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C1B8F4012380813B7DCD855C /* Assets.xcassets */; };
 		2BC03410895E93728CD4DB2B /* WebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DF5C9C435659AC4A72E73D /* WebView.swift */; };
 		39897AA8DBAF870E3C966622 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E34D6A225CFDE5ECE1B110 /* ContentView.swift */; };
@@ -20,6 +21,7 @@
 		66DF5C9C435659AC4A72E73D /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
 		C1B8F4012380813B7DCD855C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C5D92D58D603831B09ACFC40 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		CBABF4759BC4344FFB005699 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		CDAF91DA595E2D2EED36EE06 /* SCARBApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SCARBApp.swift; sourceTree = "<group>"; };
 		D7330F9115BD752FBC8ACB8E /* SCARB.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SCARB.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF38962B08EAB5F427817148 /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
@@ -50,6 +52,7 @@
 				42E34D6A225CFDE5ECE1B110 /* ContentView.swift */,
 				CDAF91DA595E2D2EED36EE06 /* SCARBApp.swift */,
 				C5D92D58D603831B09ACFC40 /* SettingsView.swift */,
+				CBABF4759BC4344FFB005699 /* Voice.swift */,
 				66DF5C9C435659AC4A72E73D /* WebView.swift */,
 			);
 			path = Sources;
@@ -129,6 +132,7 @@
 				39897AA8DBAF870E3C966622 /* ContentView.swift in Sources */,
 				C04414D3FD830C933C375891 /* SCARBApp.swift in Sources */,
 				6BA7929D260EBDB72BA02D5D /* SettingsView.swift in Sources */,
+				140C6A7224B6FE13C1FB4507 /* Voice.swift in Sources */,
 				2BC03410895E93728CD4DB2B /* WebView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

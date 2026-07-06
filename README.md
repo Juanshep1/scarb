@@ -110,6 +110,16 @@ def run(args):
     return {"ok": True, "result": str(args.get("text", ""))[::-1]}
 ```
 
+## Voice — talk to SCARB, hear it back
+
+- **Talk to it:** tap the 🎤 in the composer and speak. In a browser this uses
+  free built-in speech recognition; in the iOS app it uses on-device speech.
+- **Hear it:** tap 🔈 in the header to have SCARB read its replies aloud. Free
+  and natural out of the box (your OS's neural voice). For a premium voice, add
+  an **ElevenLabs** key in Setup → Voice and pick a voice (free ElevenLabs plans
+  work with the "premade" voices; the default is Sarah). SCARB proxies TTS
+  through your server, so the key never leaves your machine.
+
 ## Conversations
 
 SCARB keeps every chat. Tap the **scarab icon** (top-left) to open the history
