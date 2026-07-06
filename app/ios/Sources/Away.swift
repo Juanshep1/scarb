@@ -59,7 +59,7 @@ final class Away: ObservableObject {
     private var activeModel: String { model.isEmpty ? Self.defaultModel(provider) : model }
 
     private let system = """
-    You are SCARB, in away mode. You're on your human's phone, away from their Mac, so right now you CANNOT run commands, control the computer, use the terminal, or use your skills — those live on the Mac and come back when it's reachable. You can still think, answer, plan, brainstorm, remember within this chat, and just talk. Be warm, brief, and honest. If they ask you to do something that needs the computer, say plainly that it needs the Mac and offer to do it (or draft it) for when you're reconnected.
+    You are SCARB, in away mode. You're on your human's phone, away from their Mac, so right now you CANNOT run commands, control the computer, use the terminal, or use your Mac skills — those live on the Mac and return when it's reachable. But you DO have the internet: call the web_search tool to look things up, check current facts, prices, news, docs — anything you're unsure of or that may have changed. Don't guess when you can search. You can also think, plan, brainstorm, and remember within this chat. Be warm, brief, and honest. If they ask for something that needs the computer, say it needs the Mac and offer to draft it for when you're reconnected.
     """
 
     func reset() { messages = []; error = nil }
@@ -84,11 +84,129 @@ final class Away: ObservableObject {
     }
 
     var onReply: ((String) -> Void)?
+    var onSearch: ((String) -> Void)?   // fires when away-SCARB searches the web
 
     private func complete(_ history: [AwayMsg]) async throws -> String {
-        let msgs = history.map { ["role": $0.role == .user ? "user" : "assistant", "content": $0.text] }
-        if provider == "anthropic" { return try await anthropic(msgs) }
-        return try await openai(msgs)
+        let msgs: [[String: Any]] = history.map { ["role": $0.role == .user ? "user" : "assistant", "content": $0.text] }
+        if provider == "anthropic" { return try await anthropicLoop(msgs) }
+        return try await openaiLoop(msgs)
+    }
+
+    // ---- the web, so away-mode SCARB can look things up ----------------------
+    private let webTool: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "web_search",
+            "description": "Search the web for current or unknown information. Returns top results with titles, URLs, and snippets.",
+            "parameters": ["type": "object",
+                           "properties": ["query": ["type": "string", "description": "what to search for"]],
+                           "required": ["query"]],
+        ],
+    ]
+
+    private func stripHTML(_ s: String) -> String {
+        var t = s.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        for (a, b) in [("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&#39;", "'"), ("&quot;", "\""), ("&nbsp;", " ")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        return t.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func searchWeb(_ query: String) async -> String {
+        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        guard !query.isEmpty, let url = URL(string: "https://html.duckduckgo.com/html/?q=\(q)") else { return "no query" }
+        var req = URLRequest(url: url); req.timeoutInterval = 15
+        req.setValue("Mozilla/5.0 (iPhone) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            let html = String(data: data, encoding: .utf8) ?? ""
+            let ns = html as NSString
+            let linkRe = try NSRegularExpression(pattern: "result__a\"[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>", options: [.dotMatchesLineSeparators])
+            let snipRe = try NSRegularExpression(pattern: "result__snippet[^>]*>(.*?)</a>", options: [.dotMatchesLineSeparators])
+            let links = linkRe.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            let snips = snipRe.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            var out = "", n = 0
+            for m in links {
+                let href = ns.substring(with: m.range(at: 1))
+                if href.contains("duckduckgo.com/y.js") || href.contains("ad_domain") { continue }
+                let title = stripHTML(ns.substring(with: m.range(at: 2)))
+                var real = href
+                if let r = URLComponents(string: href)?.queryItems?.first(where: { $0.name == "uddg" })?.value { real = r }
+                var snip = ""
+                if n < snips.count { snip = String(stripHTML(ns.substring(with: snips[n].range(at: 1))).prefix(200)) }
+                out += "\(n + 1). \(title)\n\(real)\n\(snip)\n\n"
+                n += 1
+                if n >= 6 { break }
+            }
+            return out.isEmpty ? "no results found" : out
+        } catch {
+            return "search failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func openaiLoop(_ history: [[String: Any]]) async throws -> String {
+        var msgs: [[String: Any]] = [["role": "system", "content": system]] + history
+        for _ in 0..<5 {
+            let payload: [String: Any] = ["model": activeModel, "max_tokens": 1500, "messages": msgs,
+                                          "tools": [webTool], "tool_choice": "auto"]
+            let data = try await post(base() + "/chat/completions", payload,
+                                      apiKey.isEmpty ? [:] : ["Authorization": "Bearer \(apiKey)"])
+            guard let j = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = j["choices"] as? [[String: Any]],
+                  let msg = choices.first?["message"] as? [String: Any] else { throw AwayError("bad reply") }
+            if let calls = msg["tool_calls"] as? [[String: Any]], !calls.isEmpty {
+                msgs.append(msg)
+                for tc in calls {
+                    let fn = tc["function"] as? [String: Any]
+                    var query = ""
+                    if let a = fn?["arguments"] as? String,
+                       let d = a.data(using: .utf8),
+                       let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                        query = obj["query"] as? String ?? ""
+                    }
+                    onSearch?(query)
+                    let result = await searchWeb(query)
+                    msgs.append(["role": "tool", "tool_call_id": tc["id"] as? String ?? "", "content": result])
+                }
+                continue
+            }
+            if let c = msg["content"] as? String, !c.isEmpty { return c }
+            throw AwayError("empty reply")
+        }
+        return "I searched a few times but couldn't wrap it up — try asking again."
+    }
+
+    private func anthropicLoop(_ history: [[String: Any]]) async throws -> String {
+        let tool: [String: Any] = ["name": "web_search", "description": "Search the web for current or unknown info.",
+                                   "input_schema": ["type": "object",
+                                                    "properties": ["query": ["type": "string"]], "required": ["query"]]]
+        var msgs = history
+        for _ in 0..<5 {
+            let payload: [String: Any] = ["model": activeModel, "max_tokens": 1500, "system": system,
+                                          "messages": msgs, "tools": [tool]]
+            let data = try await post(base() + "/messages", payload,
+                                      ["x-api-key": apiKey, "anthropic-version": "2023-06-01"])
+            guard let j = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = j["content"] as? [[String: Any]] else { throw AwayError("bad reply") }
+            let uses = content.filter { ($0["type"] as? String) == "tool_use" }
+            if !uses.isEmpty {
+                msgs.append(["role": "assistant", "content": content])
+                var results: [[String: Any]] = []
+                for u in uses {
+                    let query = (u["input"] as? [String: Any])?["query"] as? String ?? ""
+                    onSearch?(query)
+                    let r = await searchWeb(query)
+                    results.append(["type": "tool_result", "tool_use_id": u["id"] as? String ?? "", "content": r])
+                }
+                msgs.append(["role": "user", "content": results])
+                continue
+            }
+            let text = content.compactMap { $0["text"] as? String }.joined()
+            if !text.isEmpty { return text }
+            throw AwayError("empty reply")
+        }
+        return "I searched a few times but couldn't wrap it up — try again."
     }
 
     private func post(_ url: String, _ payload: [String: Any], _ headers: [String: String]) async throws -> Data {
@@ -105,30 +223,6 @@ final class Away: ObservableObject {
         return data
     }
 
-    private func openai(_ msgs: [[String: String]]) async throws -> String {
-        let payload: [String: Any] = ["model": activeModel, "max_tokens": 1500,
-            "messages": [["role": "system", "content": system]] + msgs]
-        let data = try await post(base() + "/chat/completions", payload,
-                                  apiKey.isEmpty ? [:] : ["Authorization": "Bearer \(apiKey)"])
-        let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let choices = j?["choices"] as? [[String: Any]],
-           let m = choices.first?["message"] as? [String: Any],
-           let c = m["content"] as? String, !c.isEmpty { return c }
-        throw AwayError("empty reply")
-    }
-
-    private func anthropic(_ msgs: [[String: String]]) async throws -> String {
-        let payload: [String: Any] = ["model": activeModel, "max_tokens": 1500,
-            "system": system, "messages": msgs]
-        let data = try await post(base() + "/messages", payload,
-            ["x-api-key": apiKey, "anthropic-version": "2023-06-01"])
-        let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let content = j?["content"] as? [[String: Any]] {
-            let text = content.compactMap { $0["text"] as? String }.joined()
-            if !text.isEmpty { return text }
-        }
-        throw AwayError("empty reply")
-    }
 }
 
 struct AwayError: Error { let message: String; init(_ m: String) { message = m } }

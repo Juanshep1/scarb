@@ -13,15 +13,18 @@ struct SettingsView: View {
                     Section {
                         ForEach($conn.hosts) { $host in
                             HStack {
+                                if let ok = conn.routeStatus[host.id] {
+                                    Circle().fill(ok ? Palette.emerald : Palette.red).frame(width: 8, height: 8)
+                                }
                                 TextField("label", text: $host.label)
-                                    .frame(width: 92)
+                                    .frame(width: 82)
                                     .foregroundStyle(Palette.dim)
                                 Divider()
-                                TextField("100.x.y.z or 10.0.0.x", text: $host.address)
-                                    .keyboardType(.numbersAndPunctuation)
+                                TextField("100.x.y.z / name.ts.net / 10.0.0.x", text: $host.address)
+                                    .keyboardType(.URL)
                                     .autocorrectionDisabled()
                                     .textInputAutocapitalization(.never)
-                                    .font(.system(.body, design: .monospaced))
+                                    .font(.system(size: 13, design: .monospaced))
                             }
                         }
                         .onDelete { idx in
@@ -31,6 +34,14 @@ struct SettingsView: View {
                             conn.addHost()
                         } label: {
                             Label("Add a route to your Mac", systemImage: "plus")
+                        }
+                        Button {
+                            Task { await conn.testRoutes() }
+                        } label: {
+                            HStack {
+                                Label("Test routes from this phone", systemImage: "dot.radiowaves.left.and.right")
+                                if conn.testing { Spacer(); ProgressView() }
+                            }
                         }
                     } header: {
                         Text("Ways to reach SCARB")

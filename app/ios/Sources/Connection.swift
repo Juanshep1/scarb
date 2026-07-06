@@ -30,8 +30,26 @@ final class Connection: ObservableObject {
     @Published var activeBase: String? = nil    // e.g. http://100.x.y.z:8787
     @Published var hasInternet = true           // to tell "no signal" from "Tailscale off"
 
+    @Published var routeStatus: [UUID: Bool] = [:]   // per-host reachability, for the tester
+    @Published var testing = false
     private var probing = false
     private var timer: Timer?
+
+    // Ping every route and record which reach the Mac — so you can see, from the
+    // phone, whether Tailscale is actually getting you to your Mac.
+    func testRoutes() async {
+        testing = true
+        var results: [UUID: Bool] = [:]
+        for host in hosts {
+            if let url = urlFor(host) {
+                results[host.id] = await ping(url.absoluteString)
+            } else {
+                results[host.id] = false
+            }
+        }
+        routeStatus = results
+        testing = false
+    }
 
     init() {
         let d = UserDefaults.standard

@@ -6,6 +6,7 @@ struct StandaloneChatView: View {
     @ObservedObject var away: Away
     @State private var input = ""
     @State private var showSettings = false
+    @State private var searchNote = ""
     @StateObject private var voice = VoiceBox()
 
     var body: some View {
@@ -20,7 +21,8 @@ struct StandaloneChatView: View {
         }
         .sheet(isPresented: $showSettings) { AwaySettingsView(away: away) }
         .onAppear {
-            away.onReply = { text in voice.speak(text) }
+            away.onReply = { text in searchNote = ""; voice.speak(text) }
+            away.onSearch = { q in searchNote = q }
             voice.onFinal = { text in input = ""; away.send(text) }
         }
     }
@@ -74,7 +76,7 @@ struct StandaloneChatView: View {
                         VStack(spacing: 10) {
                             Text("🪲").font(.system(size: 44))
                             Text(away.configured
-                                 ? "I'm here even without your Mac. Ask me anything."
+                                 ? "I'm here even without your Mac — and I can search the web. Ask me anything."
                                  : "Add a cloud API key in Settings to chat away from your Mac.")
                                 .multilineTextAlignment(.center).foregroundStyle(Palette.dim)
                                 .padding(.horizontal, 30)
@@ -87,7 +89,8 @@ struct StandaloneChatView: View {
                     ForEach(away.messages) { m in bubble(m) }
                     if away.busy {
                         HStack(spacing: 8) { ProgressView().tint(Palette.gold)
-                            Text("thinking…").font(.caption).foregroundStyle(Palette.dim) }
+                            Text(searchNote.isEmpty ? "thinking…" : "🌐 searching: \(searchNote)")
+                                .font(.caption).foregroundStyle(Palette.dim) }
                     }
                     if let e = away.error {
                         Text(e).font(.caption).foregroundStyle(Palette.red)
