@@ -43,12 +43,23 @@ struct StandaloneChatView: View {
     }
 
     private var banner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "wifi.slash").font(.caption2)
-            Text("Your Mac isn't reachable — chatting on the cloud. Full powers (terminal, computer control) return when it's back.")
-                .font(.caption2)
-            Spacer(minLength: 0)
-            Button("Retry") { Task { await conn.probe() } }.font(.caption2.bold())
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi.slash").font(.caption2)
+                Text("Your Mac isn't reachable — chatting on the cloud. Full powers return when it's back.")
+                    .font(.caption2)
+                Spacer(minLength: 0)
+                Button("Retry") { Task { await conn.probe() } }.font(.caption2.bold())
+            }
+            if conn.hasInternet {
+                // Online but no route to the Mac → Tailscale isn't on for this phone.
+                HStack(spacing: 8) {
+                    Text("To reach your Mac remotely, turn on Tailscale on this phone:")
+                        .font(.caption2)
+                    Spacer(minLength: 0)
+                    TailscaleButton().scaleEffect(0.9)
+                }
+            }
         }
         .foregroundStyle(Palette.gold)
         .padding(.horizontal, 14).padding(.vertical, 7)

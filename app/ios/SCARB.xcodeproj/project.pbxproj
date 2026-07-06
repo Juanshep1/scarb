@@ -27,7 +27,7 @@
 		C5D92D58D603831B09ACFC40 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		CBABF4759BC4344FFB005699 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		CDAF91DA595E2D2EED36EE06 /* SCARBApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SCARBApp.swift; sourceTree = "<group>"; };
-		D7330F9115BD752FBC8ACB8E /* SCARB.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SCARB.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D7330F9115BD752FBC8ACB8E /* SCARB.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SCARB.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D963667DDFEAC30D27153455 /* StandaloneChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneChatView.swift; sourceTree = "<group>"; };
 		E1E2D151D244575B0EB5620D /* AwaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwaySettingsView.swift; sourceTree = "<group>"; };
 		EF38962B08EAB5F427817148 /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
@@ -159,6 +159,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 78RJ6F9JL2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
@@ -301,6 +302,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 78RJ6F9JL2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;

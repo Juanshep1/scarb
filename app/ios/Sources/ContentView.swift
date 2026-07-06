@@ -1,4 +1,26 @@
 import SwiftUI
+import UIKit
+
+// Opens the Tailscale app so you can turn its VPN on (that's what actually
+// routes to your Mac away from home). Falls back to the App Store if it's not
+// installed.
+struct TailscaleButton: View {
+    var body: some View {
+        Button {
+            let app = URL(string: "tailscale://")!
+            let store = URL(string: "https://apps.apple.com/app/tailscale/id1470499037")!
+            UIApplication.shared.open(app, options: [:]) { ok in
+                if !ok { UIApplication.shared.open(store) }
+            }
+        } label: {
+            Label("Open Tailscale", systemImage: "network")
+                .font(.callout.bold())
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .background(Palette.emerald.opacity(0.15), in: Capsule())
+        }
+        .foregroundStyle(Palette.emerald)
+    }
+}
 
 struct ContentView: View {
     @EnvironmentObject var conn: Connection
@@ -89,14 +111,23 @@ struct ContentView: View {
                 Text("Looking for your computer…\nTailscale or local network.")
                     .multilineTextAlignment(.center).foregroundStyle(Palette.dim)
             case .offline:
-                Text("Can't reach SCARB on any route.")
-                    .foregroundStyle(Palette.red)
-                Text("Check: 1) is Tailscale ON on THIS phone? (open the Tailscale app)  2) is `python3 scarb.py` running on your Mac, and the Mac awake?  3) at home you can also use the same WiFi.")
-                    .multilineTextAlignment(.center).font(.callout).foregroundStyle(Palette.dim)
-                    .padding(.horizontal, 30)
+                if conn.hasInternet {
+                    Text("Online, but can't reach your Mac.")
+                        .foregroundStyle(Palette.red)
+                    Text("This phone has internet but no route to your Mac — that means **Tailscale isn't connected on this phone**. Open the Tailscale app and turn it on (it should show connected/green). Also make sure your Mac is awake with `scarb.py` running.")
+                        .multilineTextAlignment(.center).font(.callout).foregroundStyle(Palette.dim)
+                        .padding(.horizontal, 26)
+                    TailscaleButton()
+                } else {
+                    Text("No internet on this phone.")
+                        .foregroundStyle(Palette.red)
+                    Text("You're offline. When you're back on Wi-Fi or cellular (with Tailscale on), SCARB reconnects on its own.")
+                        .multilineTextAlignment(.center).font(.callout).foregroundStyle(Palette.dim)
+                        .padding(.horizontal, 30)
+                }
                 Button("Try again") { Task { await conn.probe() } }
                     .buttonStyle(.borderedProminent).tint(Palette.gold)
-                Button("Settings") { showSettings = true }
+                Button("Connection settings") { showSettings = true }
                     .foregroundStyle(Palette.dim)
             case .connected:
                 EmptyView()

@@ -28,6 +28,7 @@ final class Connection: ObservableObject {
     @Published var token: String { didSet { save() } }
     @Published var state: LinkState = .searching
     @Published var activeBase: String? = nil    // e.g. http://100.x.y.z:8787
+    @Published var hasInternet = true           // to tell "no signal" from "Tailscale off"
 
     private var probing = false
     private var timer: Timer?
@@ -91,8 +92,19 @@ final class Connection: ObservableObject {
             activeBase = base
             state = .connected(host.label)
         } else {
+            // Can't reach the Mac. Is that because there's no signal at all, or
+            // because we're online but Tailscale isn't routing to the Mac?
+            hasInternet = await checkInternet()
             state = .offline
         }
+    }
+
+    private func checkInternet() async -> Bool {
+        guard let url = URL(string: "https://www.gstatic.com/generate_204") else { return false }
+        var req = URLRequest(url: url); req.timeoutInterval = 5
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        do { _ = try await URLSession.shared.data(for: req); return true }
+        catch { return false }
     }
 
     // If we think we're connected, verify the current base still answers; if not,
