@@ -77,7 +77,7 @@ DEFAULT_BASE = {
 # stay environment-only, so nobody can weaken the auth from the browser. Keys
 # and models are kept PER PROVIDER so switching providers never sends one
 # service's key to another.
-UI_FIELDS = ("provider", "keys", "models", "local_model", "local_base_url")
+UI_FIELDS = ("provider", "keys", "models", "local_model", "local_base_url", "molt")
 
 
 def _load_saved():
@@ -113,6 +113,8 @@ CONFIG = {
     "models": _MODELS,   # {provider: model_id}
     "local_model": _SAVED.get("local_model") or env("SCARB_LOCAL_MODEL", "llama3.1"),
     "local_base_url": _SAVED.get("local_base_url") or env("SCARB_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1"),
+    "molt": _SAVED.get("molt", False),
+    "molt_interval": int(env("SCARB_MOLT_INTERVAL", "1200")),
     "token": env("SCARB_TOKEN", ""),
     "port": int(env("SCARB_PORT", "8787")),
     "host": env("SCARB_HOST", "0.0.0.0"),
@@ -997,6 +999,142 @@ def _short(result):
     return s[:1200]
 
 
+# ===========================================================================
+# METAMORPHOSIS — SCARB molts. When enabled, it improves its OWN skills on its
+# own initiative, with no prompt from you: picks a skill, makes it more robust
+# or capable (or invents a small new one), validates it, keeps it, and logs
+# what it taught itself. The scarab grows by molting; so does SCARB.
+# ===========================================================================
+
+SKILL_TOOLS = {"create_skill", "update_skill", "read_skill", "delete_skill", "list_skills"}
+EVOLUTION = []   # [{t, summary, skills}]
+EVOLUTION_PATH = os.path.join(MEMORY_DIR, "evolution.json")
+
+
+def load_evolution():
+    try:
+        with open(EVOLUTION_PATH) as f:
+            EVOLUTION.extend(json.load(f)[-200:])
+    except Exception:
+        pass
+
+
+def log_evolution(summary, skills):
+    entry = {"t": time.time(), "summary": summary[:400], "skills": skills}
+    EVOLUTION.append(entry)
+    try:
+        with open(EVOLUTION_PATH, "w") as f:
+            json.dump(EVOLUTION[-200:], f)
+    except Exception:
+        pass
+    return entry
+
+
+def molt_system():
+    soul = read_doc("soul.md")
+    skills = "\n".join(f"- {s['name']}: {s['description']}" for s in SKILLS.list()) or "(none yet)"
+    return (
+        "You are SCARB, MOLTING — improving yourself with nobody asking. The scarab "
+        "grows by shedding its shell; this is you doing the same to your own abilities.\n\n"
+        "Do ONE meaningful thing this molt:\n"
+        "• take an existing skill and make it more robust or more capable (handle bad/missing "
+        "args, add an obviously-useful option, fix a latent bug, generalize it), OR\n"
+        "• add ONE small, genuinely useful, SELF-CONTAINED skill.\n\n"
+        "HARD LIMITS: use ONLY these tools — read_skill, list_skills, create_skill, update_skill. "
+        "Skills you write must be pure Python standard library and SAFE: no shell, no network, no "
+        "file deletion, no controlling apps. Don't delete skills. Read a skill before you rewrite it. "
+        "Make a real improvement, not a cosmetic one.\n\n"
+        "When done, reply with ONE short sentence (no tool call) describing what you improved and why — "
+        "written as 'I …'.\n\n"
+        f"SOUL\n{soul}\n\nYOUR SKILLS\n{skills}\n"
+    )
+
+
+def model_ready():
+    p = provider_for("cloud")[0]
+    if p == "ollama":
+        return bool(list_ollama_models())
+    return bool(key_for(p))
+
+
+def molt_once():
+    """One autonomous self-improvement pass."""
+    if BUSY.is_set() or not model_ready():
+        return
+    BUSY.set()
+    try:
+        BUS.emit("molt_start")
+        before = set(SKILLS.skills.keys())
+        touched, summary = [], ""
+        system = molt_system()
+        messages = [{"role": "user", "content": "Molt now. Improve yourself."}]
+        native = provider_for("cloud")[0] != "anthropic"
+        specs = [s for s in tool_specs() if s["function"]["name"] in SKILL_TOOLS] if native else None
+        for _ in range(8):
+            try:
+                msg = openai_message(system, messages, "cloud", specs) if native \
+                    else {"content": llm_chat(system, messages, kind="cloud")}
+            except LLMError as e:
+                BUS.emit("molt_done", ok=False, text="couldn't molt: " + friendly_error(e, "cloud"))
+                return
+            content = strip_thinking(msg.get("content") or "")
+            tcs = msg.get("tool_calls") or []
+            if tcs:
+                messages.append({"role": "assistant", "content": content or None, "tool_calls": tcs})
+                for tc in tcs:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    raw = fn.get("arguments", "{}")
+                    try:
+                        args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+                    except Exception:
+                        args = {}
+                    if name not in SKILL_TOOLS:
+                        res = {"ok": False, "error": "during a molt you may only use skill tools"}
+                    else:
+                        BUS.emit("action", tool=name, args=args)
+                        res = dispatch(name, args)
+                        BUS.emit("result", tool=name, ok=bool(res.get("ok", True)), result=_short(res))
+                        if name in ("create_skill", "update_skill") and res.get("ok") and args.get("name"):
+                            touched.append(args["name"])
+                    messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                                     "content": json.dumps(res)[:4000]})
+                continue
+            action = extract_action(content)
+            if action and action.get("tool") in SKILL_TOOLS:
+                name = action["tool"]; args = action.get("args", {})
+                BUS.emit("action", tool=name, args=args)
+                res = dispatch(name, args)
+                BUS.emit("result", tool=name, ok=bool(res.get("ok", True)), result=_short(res))
+                if name in ("create_skill", "update_skill") and res.get("ok") and args.get("name"):
+                    touched.append(args["name"])
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": "TOOL RESULT:\n" + json.dumps(res)[:4000]})
+                continue
+            summary = content
+            break
+        new = list(set(SKILLS.skills.keys()) - before)
+        touched = list(dict.fromkeys(touched + new))
+        if touched or summary:
+            entry = log_evolution(summary or ("Refined " + ", ".join(touched)),
+                                  touched or ["(no change)"])
+            BUS.emit("molt", **entry)
+        BUS.emit("molt_done", ok=True, text=summary or "molt complete", skills=touched)
+    finally:
+        BUSY.clear()
+
+
+def molt_loop():
+    """Background heartbeat: molt every so often while metamorphosis is on."""
+    while True:
+        time.sleep(max(120, int(CONFIG.get("molt_interval", 1200))))
+        if CONFIG.get("molt") and not BUSY.is_set():
+            try:
+                molt_once()
+            except Exception:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # HTTP server — serves the UI and the API, streams events over SSE.
 # ---------------------------------------------------------------------------
@@ -1060,8 +1198,14 @@ class Handler(BaseHTTPRequestHandler):
                 "provider": provider_for("cloud")[0],
                 "model": provider_for("cloud")[1],
                 "local_model": CONFIG["local_model"],
+                "molt": bool(CONFIG.get("molt")),
+                "evolution": EVOLUTION[-40:],
                 "busy": BUSY.is_set(),
             })
+        if path == "/api/evolution":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            return self._send(200, {"evolution": EVOLUTION[-100:], "molt": bool(CONFIG.get("molt"))})
         if path == "/api/conversations":
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
@@ -1119,6 +1263,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "empty message"})
             threading.Thread(target=run_turn, args=(message, kind), daemon=True).start()
             return self._send(200, {"ok": True})
+        if path == "/api/molt":
+            # Toggle metamorphosis, and/or molt right now so you can watch it.
+            if "enabled" in body:
+                CONFIG["molt"] = bool(body["enabled"])
+                save_config()
+                BUS.emit("molt_config", enabled=CONFIG["molt"])
+            if body.get("now") or body.get("enabled"):
+                if not model_ready():
+                    return self._send(200, {"ok": False, "molt": CONFIG["molt"],
+                                            "error": "connect a model in Setup first"})
+                threading.Thread(target=molt_once, daemon=True).start()
+            return self._send(200, {"ok": True, "molt": bool(CONFIG.get("molt"))})
         if path == "/api/save_doc":
             name = body.get("name")
             if name not in ("identity.md", "soul.md"):
@@ -1263,6 +1419,8 @@ def local_ip():
 
 def main():
     load_convos()
+    load_evolution()
+    threading.Thread(target=molt_loop, daemon=True).start()
     server = ThreadingHTTPServer((CONFIG["host"], CONFIG["port"]), Handler)
     port = CONFIG["port"]
     print(f"\n  ✦ SCARB {VERSION} — self-improving assistant")

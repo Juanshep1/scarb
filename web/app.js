@@ -107,11 +107,45 @@ function handle(ev) {
       if (ev.model) $("subtitle").textContent = (ev.where || "") + " · " + ev.model;
       break;
     case "skill": onSkillEvent(ev); break;
+    case "molt_start": $("moltBanner").classList.add("show"); document.body.classList.add("molting"); break;
+    case "molt": addEvolve(ev); break;
+    case "molt_done":
+      $("moltBanner").classList.remove("show"); document.body.classList.remove("molting");
+      onSkillEvent({ action: "saved" });   // refresh skills panel
+      if (ev.ok === false && ev.text) addStep("error", "molt", esc(ev.text));
+      break;
+    case "molt_config": setMolt(ev.enabled); break;
     case "doc": refreshDocs(); break;
     case "config": $("subtitle").textContent = (ev.provider || "") + " · " + (ev.model || ""); break;
     case "reset": stream.innerHTML = ""; break;
     case "log": break;
   }
+}
+
+// ---- metamorphosis (self-improvement) ------------------------------------
+let MOLT_ON = false;
+function setMolt(on) { MOLT_ON = !!on; $("moltBtn").classList.toggle("on", MOLT_ON); }
+$("moltBtn").onclick = async () => {
+  const turningOn = !MOLT_ON;
+  setMolt(turningOn);
+  // turning it on also molts once right away, so you see it happen
+  const r = await api("/api/molt", "POST", { enabled: turningOn, now: turningOn });
+  if (r && r.error) { addStep("error", "molt", esc(r.error)); setMolt(r.molt); }
+};
+
+function addEvolve(ev) {
+  clearEmpty();
+  const d = document.createElement("div");
+  d.className = "evolve";
+  const h = document.createElement("div"); h.className = "h";
+  h.textContent = "🦋 SCARB evolved";
+  const s = document.createElement("div"); s.className = "s"; s.textContent = ev.summary || "improved a skill";
+  d.appendChild(h); d.appendChild(s);
+  if (ev.skills && ev.skills.length) {
+    const k = document.createElement("div"); k.className = "k"; k.textContent = "→ " + ev.skills.join(", ");
+    d.appendChild(k);
+  }
+  stream.appendChild(d); if (atBottom()) scroll();
 }
 
 function setStatus(text, busy) {
@@ -445,6 +479,7 @@ async function boot() {
     $("soulEdit").value = state.soul || "";
     $("subtitle").textContent = (state.provider || "") + " · " + (state.model || "");
     (state.history || []).forEach((m) => m.role === "user" ? addUser(m.content) : addScarb(m.content));
+    setMolt(state.molt);
     BOOT_T = Date.now() / 1000;
     connect();
     // Deep-link: /#setup opens the model-setup panel straight away.

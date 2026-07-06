@@ -50,6 +50,32 @@ body.busy #scarab .shell{animation:shellGlow 1s ease-in-out infinite}
 .iconbtn{background:var(--panel);border:1px solid var(--line);color:var(--dim);
   width:30px;height:30px;border-radius:8px;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center}
 .iconbtn:hover{color:var(--gold);border-color:var(--gold-dim)}
+.moltbtn.on{border-color:var(--emerald);box-shadow:0 0 0 1px var(--emerald),0 0 14px rgba(79,214,160,.4)}
+.moltbtn.on{animation:moltpulse 2.2s ease-in-out infinite}
+@keyframes moltpulse{50%{box-shadow:0 0 0 1px var(--emerald),0 0 22px rgba(79,214,160,.7)}}
+
+/* while molting: the scarab dissolves-and-reforms and the glow goes emerald */
+body.molting .mark{filter:drop-shadow(0 0 20px rgba(79,214,160,.9))}
+body.molting #scarab{animation:metamorph 1.6s ease-in-out infinite}
+body.molting #scarab .shell{animation:shellGlow .8s ease-in-out infinite}
+body.molting #scarab .legs{animation:legwiggle .35s ease-in-out infinite}
+@keyframes metamorph{0%,100%{transform:scale(1) rotate(0)}50%{transform:scale(1.14) rotate(8deg)}}
+
+/* the "SCARB is molting" banner */
+.molt-banner{display:none}
+.molt-banner.show{display:block;text-align:center;color:var(--emerald);font-size:12.5px;
+  letter-spacing:.03em;padding:8px;background:linear-gradient(180deg,rgba(79,214,160,.14),transparent);
+  border-bottom:1px solid rgba(79,214,160,.25);animation:bannerglow 2s ease-in-out infinite}
+@keyframes bannerglow{50%{color:#9af0cd}}
+
+/* an evolution entry in the chat (something SCARB taught itself) */
+.evolve{align-self:stretch;max-width:760px;margin:2px auto;width:100%;
+  border:1px solid rgba(79,214,160,.35);background:linear-gradient(180deg,rgba(79,214,160,.08),transparent);
+  border-radius:12px;padding:12px 14px}
+.evolve .h{color:var(--emerald);font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+  display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.evolve .s{color:var(--ink);font-size:14px;line-height:1.45}
+.evolve .k{color:var(--faint);font-size:11.5px;font-family:var(--mono);margin-top:6px}
 .title{font-weight:800;letter-spacing:.14em;font-size:15px}
 .title b{color:var(--gold)}
 .subtitle{color:var(--faint);font-size:11px;letter-spacing:.08em;margin-top:1px}
