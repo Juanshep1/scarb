@@ -74,6 +74,16 @@ resilient **connection manager**: it probes Tailscale *and* your local network,
 connects to whichever answers, and fails over automatically — so if Tailscale
 drops it still reaches your Mac. Native mic and audio built in.
 
+### Away mode — SCARB works without the computer
+When the Mac's SCARB server can't be reached (Mac off, no network to it), the
+app no longer just shows an offline screen — it drops into **away mode**, a
+native chat that talks **straight to a cloud model from the phone**, with voice
+(on-device mic + spoken replies). You can still think, ask, plan, and talk to
+SCARB from anywhere. Computer-use and the terminal need the Mac, so away mode is
+honest about that and the full powers return automatically the moment the server
+is reachable again. Set a cloud key for it under Away-mode settings; the key
+stays only on the device.
+
 ## Full-control upgrade (10×)
 SCARB now stands on its own as a full agent on your machine — built for use over
 Tailscale from anywhere.

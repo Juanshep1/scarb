@@ -11,19 +11,25 @@
 		228CBA4A440620AAEDCBE972 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C1B8F4012380813B7DCD855C /* Assets.xcassets */; };
 		2BC03410895E93728CD4DB2B /* WebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DF5C9C435659AC4A72E73D /* WebView.swift */; };
 		39897AA8DBAF870E3C966622 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E34D6A225CFDE5ECE1B110 /* ContentView.swift */; };
+		61156BA82F3BA1C2E65EAA59 /* AwaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1E2D151D244575B0EB5620D /* AwaySettingsView.swift */; };
 		6BA7929D260EBDB72BA02D5D /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5D92D58D603831B09ACFC40 /* SettingsView.swift */; };
+		86652EEE9CD5C99122E42582 /* StandaloneChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D963667DDFEAC30D27153455 /* StandaloneChatView.swift */; };
 		C04414D3FD830C933C375891 /* SCARBApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAF91DA595E2D2EED36EE06 /* SCARBApp.swift */; };
 		EF4772F08A0F699661C8B888 /* Connection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF38962B08EAB5F427817148 /* Connection.swift */; };
+		FC9F2B09F524629E05419A1B /* Away.swift in Sources */ = {isa = PBXBuildFile; fileRef = A37552CC9E760535A0A1C3D2 /* Away.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		42E34D6A225CFDE5ECE1B110 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		66DF5C9C435659AC4A72E73D /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
+		A37552CC9E760535A0A1C3D2 /* Away.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Away.swift; sourceTree = "<group>"; };
 		C1B8F4012380813B7DCD855C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C5D92D58D603831B09ACFC40 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		CBABF4759BC4344FFB005699 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		CDAF91DA595E2D2EED36EE06 /* SCARBApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SCARBApp.swift; sourceTree = "<group>"; };
 		D7330F9115BD752FBC8ACB8E /* SCARB.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SCARB.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D963667DDFEAC30D27153455 /* StandaloneChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneChatView.swift; sourceTree = "<group>"; };
+		E1E2D151D244575B0EB5620D /* AwaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwaySettingsView.swift; sourceTree = "<group>"; };
 		EF38962B08EAB5F427817148 /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -48,10 +54,13 @@
 		DDB484BF8B51368A1CF3F8E9 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				A37552CC9E760535A0A1C3D2 /* Away.swift */,
+				E1E2D151D244575B0EB5620D /* AwaySettingsView.swift */,
 				EF38962B08EAB5F427817148 /* Connection.swift */,
 				42E34D6A225CFDE5ECE1B110 /* ContentView.swift */,
 				CDAF91DA595E2D2EED36EE06 /* SCARBApp.swift */,
 				C5D92D58D603831B09ACFC40 /* SettingsView.swift */,
+				D963667DDFEAC30D27153455 /* StandaloneChatView.swift */,
 				CBABF4759BC4344FFB005699 /* Voice.swift */,
 				66DF5C9C435659AC4A72E73D /* WebView.swift */,
 			);
@@ -128,10 +137,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FC9F2B09F524629E05419A1B /* Away.swift in Sources */,
+				61156BA82F3BA1C2E65EAA59 /* AwaySettingsView.swift in Sources */,
 				EF4772F08A0F699661C8B888 /* Connection.swift in Sources */,
 				39897AA8DBAF870E3C966622 /* ContentView.swift in Sources */,
 				C04414D3FD830C933C375891 /* SCARBApp.swift in Sources */,
 				6BA7929D260EBDB72BA02D5D /* SettingsView.swift in Sources */,
+				86652EEE9CD5C99122E42582 /* StandaloneChatView.swift in Sources */,
 				140C6A7224B6FE13C1FB4507 /* Voice.swift in Sources */,
 				2BC03410895E93728CD4DB2B /* WebView.swift in Sources */,
 			);

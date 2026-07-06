@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var conn: Connection
+    @StateObject private var away = Away()
     @State private var reloadToken = 0
     @State private var showSettings = false
 
@@ -15,6 +16,9 @@ struct ContentView: View {
                     Task { await conn.probe() }
                 }
                 .ignoresSafeArea(.container, edges: .bottom)
+            } else if conn.state == .offline {
+                // Mac unreachable → SCARB still works, chatting on the cloud.
+                StandaloneChatView(away: away).environmentObject(conn)
             } else {
                 statusScreen
             }
@@ -44,11 +48,11 @@ struct ContentView: View {
         }
     }
 
-    // Show the top controls when disconnected/searching (so you can fix it);
-    // hide them once the web UI is up (it has its own chrome).
+    // Show the top controls only while searching. The web UI (connected) and the
+    // away-mode chat (offline) each have their own chrome.
     private var overlayVisible: Bool {
-        if case .connected = conn.state { return false }
-        return true
+        if case .searching = conn.state { return true }
+        return false
     }
 
     private var statusPill: some View {
