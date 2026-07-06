@@ -54,12 +54,15 @@ struct StandaloneChatView: View {
                 Button("Retry") { Task { await conn.probe() } }.font(.caption2.bold())
             }
             if conn.hasInternet {
-                // Online but no route to the Mac → Tailscale isn't on for this phone.
+                // Online but no route to the Mac. With Tailscale connected, the
+                // usual culprit is iOS's Local Network permission (it gates
+                // Tailscale 100.x addresses). Offer both fixes.
+                Text("Online but can't reach your Mac. If Tailscale is ON here, iOS may be blocking it — allow SCARB's Local Network access. Also make sure your Mac is awake.")
+                    .font(.caption2)
                 HStack(spacing: 8) {
-                    Text("To reach your Mac remotely, turn on Tailscale on this phone:")
-                        .font(.caption2)
+                    AppSettingsButton().scaleEffect(0.85)
+                    TailscaleButton().scaleEffect(0.85)
                     Spacer(minLength: 0)
-                    TailscaleButton().scaleEffect(0.9)
                 }
             }
         }

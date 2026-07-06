@@ -22,6 +22,25 @@ struct TailscaleButton: View {
     }
 }
 
+// Opens THIS app's iOS Settings page, where the Local Network permission lives —
+// iOS gates Tailscale 100.x addresses behind it, so if it's off the app can't
+// reach your Mac even with Tailscale connected.
+struct AppSettingsButton: View {
+    var body: some View {
+        Button {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+        } label: {
+            Label("Allow Local Network", systemImage: "gearshape")
+                .font(.callout.bold())
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .background(Palette.gold.opacity(0.15), in: Capsule())
+        }
+        .foregroundStyle(Palette.gold)
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var conn: Connection
     @StateObject private var away = Away()
