@@ -91,7 +91,7 @@ struct ContentView: View {
             case .offline:
                 Text("Can't reach SCARB on any route.")
                     .foregroundStyle(Palette.red)
-                Text("Make sure `python3 scarb.py` is running on your Mac, and that Tailscale is up or your phone is on the same WiFi.")
+                Text("Check: 1) is Tailscale ON on THIS phone? (open the Tailscale app)  2) is `python3 scarb.py` running on your Mac, and the Mac awake?  3) at home you can also use the same WiFi.")
                     .multilineTextAlignment(.center).font(.callout).foregroundStyle(Palette.dim)
                     .padding(.horizontal, 30)
                 Button("Try again") { Task { await conn.probe() } }

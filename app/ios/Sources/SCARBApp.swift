@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct SCARBApp: App {
     @StateObject private var conn = Connection()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -10,6 +11,12 @@ struct SCARBApp: App {
                 .environmentObject(conn)
                 .preferredColorScheme(.dark)
                 .onAppear { conn.start() }
+                // When you come back to the app (got home, back on Wi-Fi,
+                // unlocked the phone), iOS had frozen the timer — re-check right
+                // away so it reconnects instead of sitting on "can't find it".
+                .onChange(of: scenePhase) { newPhase in
+                    if newPhase == .active { conn.resume() }
+                }
         }
     }
 }

@@ -74,6 +74,17 @@ resilient **connection manager**: it probes Tailscale *and* your local network,
 connects to whichever answers, and fails over automatically — so if Tailscale
 drops it still reaches your Mac. Native mic and audio built in.
 
+### Reconnect reliably, reachable anywhere
+- The app now **re-checks the connection the moment it returns to the
+  foreground** — iOS freezes the background timer, which is why it used to sit
+  on "can't find the laptop" after you got home or unlocked the phone. Fixed.
+- Default routes now include the Mac's **stable Tailscale MagicDNS name** (works
+  from anywhere, survives IP changes) plus the Tailscale IP and the home WiFi
+  IP; it connects to whichever answers. Probe timeout raised for Tailscale/
+  cellular latency. Away-mode chat no longer flickers away during background
+  re-checks. (Server-side, the caffeinate + Tailscale keep-alive keep the Mac
+  itself reachable.)
+
 ### Away mode — SCARB works without the computer
 When the Mac's SCARB server can't be reached (Mac off, no network to it), the
 app no longer just shows an offline screen — it drops into **away mode**, a

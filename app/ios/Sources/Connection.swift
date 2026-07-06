@@ -40,9 +40,12 @@ final class Connection: ObservableObject {
            let saved = try? JSONDecoder().decode([Host].self, from: data), !saved.isEmpty {
             self.hosts = saved
         } else {
-            // sensible starting points; the user edits these in Settings
+            // Sensible starting points; the user edits these in Settings.
+            // The MagicDNS name works anywhere over Tailscale and is stable even
+            // if the IP changes; the raw IP is a fallback; WiFi is for at-home.
             self.hosts = [
-                Host(label: "Tailscale", address: "100.81.53.119"),
+                Host(label: "Tailscale", address: "juans-macbook-air.tailc0f840.ts.net"),
+                Host(label: "Tailscale IP", address: "100.81.53.119"),
                 Host(label: "WiFi", address: "10.0.0.189"),
             ]
         }
@@ -50,11 +53,24 @@ final class Connection: ObservableObject {
 
     func start() {
         Task { await probe() }
+        startTimer()
+    }
+
+    private func startTimer() {
         timer?.invalidate()
         // Re-check periodically so a dropped link fails over on its own.
-        timer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { await self?.healthCheck() }
         }
+    }
+
+    // Called when the app returns to the foreground. iOS suspends the timer
+    // while backgrounded, so on resume we restart it and immediately re-check —
+    // this is what makes "I got home / back on network" reconnect on its own
+    // instead of staying stuck on "can't find the laptop".
+    func resume() {
+        startTimer()
+        Task { await healthCheck() }
     }
 
     func urlFor(_ host: Host) -> URL? {
@@ -66,7 +82,10 @@ final class Connection: ObservableObject {
         if probing { return }
         probing = true
         defer { probing = false }
-        state = .searching
+        // Only show the "searching" spinner on a fresh look; if we're already in
+        // away mode (offline), stay there quietly until we actually reconnect,
+        // so a background re-check doesn't yank away the chat.
+        if state != .offline { state = .searching }
         let reachable = await firstReachable()
         if let (host, base) = reachable {
             activeBase = base
@@ -109,7 +128,7 @@ final class Connection: ObservableObject {
     private func ping(_ base: String) async -> Bool {
         guard let url = URL(string: base + "/api/ping") else { return false }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 3
+        req.timeoutInterval = 6   // Tailscale/cellular can be slower than LAN
         req.cachePolicy = .reloadIgnoringLocalCacheData
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
