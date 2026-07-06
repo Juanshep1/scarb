@@ -1,5 +1,5 @@
 # name: amphetamine
-# description: Keep this Mac awake with the Amphetamine app. args {"action":"start","hours":3} or {"minutes":90}; {"action":"stop"}; {"action":"status"}; {"action":"toggle","hours":2} (starts if idle, stops if a session is running). Omit hours/minutes for an indefinite session. Add "allow_display_sleep": true to let the screen sleep while the Mac stays awake.
+# description: Keep this Mac awake with the Amphetamine app — including with the LID CLOSED. args {"action":"start","hours":3} or {"minutes":90}; {"action":"stop"}; {"action":"status"}; {"action":"toggle","hours":2}. Omit hours/minutes for an indefinite session. Add "lid_closed":true to a start to keep the Mac awake & on-network when the lid is shut (closed-display / clamshell mode — needed so it stays reachable over Tailscale with the lid down). Or {"action":"closed_display","on":true|false} to toggle that alone. Add "allow_display_sleep":true to let the screen sleep.
 import subprocess
 
 
@@ -54,7 +54,24 @@ def _start(args):
     if not ok:
         return {"ok": False, "error": out or "could not start an Amphetamine session"}
     screen = "screen may sleep" if dsa == "true" else "screen stays on"
-    return {"ok": True, "result": f"Amphetamine session started for {label} ({screen})."}
+    note = ""
+    if args.get("lid_closed") or args.get("closed_display"):
+        cok, cmsg = _set_closed_display(True)
+        note = " Lid-closed mode ON — stays awake & reachable with the lid shut." if cok else f" (couldn't enable lid-closed mode: {cmsg})"
+    return {"ok": True, "result": f"Amphetamine session started for {label} ({screen}).{note}"}
+
+
+def _closed_display_on():
+    ok, out = _osa('tell application "Amphetamine" to return closed display mode enabled')
+    return ok and out.strip().lower().startswith("true")
+
+
+def _set_closed_display(on):
+    verb = "enable closed display mode" if on else "disable closed display mode"
+    ok, out = _osa(f'tell application "Amphetamine" to {verb}')
+    if not ok:
+        return False, (out or "failed — enable it once manually in Amphetamine → Preferences → Sessions → Allow System to Sleep When Display is Closed")
+    return True, "closed display mode " + ("enabled" if on else "disabled")
 
 
 def _stop():
@@ -70,7 +87,8 @@ def run(args):
     action = str(args.get("action", "toggle")).lower()
     if action == "status":
         if _is_active():
-            return {"ok": True, "result": "awake" + _fmt_remaining(_remaining())}
+            lid = " · lid-closed mode ON" if _closed_display_on() else ""
+            return {"ok": True, "result": "awake" + _fmt_remaining(_remaining()) + lid}
         return {"ok": True, "result": "no session — this Mac sleeps normally"}
     if action == "start":
         return _start(args)
@@ -78,4 +96,8 @@ def run(args):
         return _stop()
     if action == "toggle":
         return _stop() if _is_active() else _start(args)
-    return {"ok": False, "error": "action must be start, stop, toggle, or status"}
+    if action in ("closed_display", "lid", "clamshell"):
+        on = bool(args.get("on", True))
+        ok, msg = _set_closed_display(on)
+        return {"ok": ok, "result": msg} if ok else {"ok": False, "error": msg}
+    return {"ok": False, "error": "action must be start, stop, toggle, status, or closed_display"}

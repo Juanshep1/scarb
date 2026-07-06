@@ -1574,6 +1574,49 @@ def tailscale_state(port):
         return (None, None)
 
 
+def hold_awake():
+    """While SCARB is running, keep the Mac from idle-sleeping so it stays
+    reachable over Tailscale (e.g. with the lid closed). `caffeinate` is tied to
+    our PID, so it stops automatically when SCARB does. For lid-closed on
+    battery you also need Amphetamine's closed-display mode (the amphetamine
+    skill can enable it) and, ideally, AC power."""
+    if sys.platform != "darwin":
+        return
+    try:
+        subprocess.Popen(["caffeinate", "-dimsu", "-w", str(os.getpid())],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def ensure_tailscale():
+    """Best-effort: keep Tailscale connected so the Mac stays reachable (e.g.
+    with the lid closed). If it's stopped/down, bring it up; if logged out, we
+    can't fix that automatically — that needs a one-time `tailscale up` login."""
+    try:
+        st = subprocess.run(["tailscale", "status"], capture_output=True, text=True, timeout=6)
+        blob = (st.stdout + st.stderr).lower()
+        if "100." in st.stdout and "stopped" not in blob:
+            return  # already connected
+        if "logged out" in blob or "needslogin" in blob:
+            return  # needs interactive login; can't auto-fix
+        # Stopped or not connected → try to bring it up (non-blocking-ish).
+        subprocess.run(["tailscale", "up", "--accept-routes"], capture_output=True, text=True, timeout=15)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def tailscale_keepalive():
+    while True:
+        try:
+            ensure_tailscale()
+        except Exception:
+            pass
+        time.sleep(60)
+
+
 def local_ip():
     try:
         for iface in ("en0", "en1"):
@@ -1588,7 +1631,10 @@ def local_ip():
 def main():
     load_convos()
     load_evolution()
+    hold_awake()
+    ensure_tailscale()
     threading.Thread(target=molt_loop, daemon=True).start()
+    threading.Thread(target=tailscale_keepalive, daemon=True).start()
     server = ThreadingHTTPServer((CONFIG["host"], CONFIG["port"]), Handler)
     port = CONFIG["port"]
     print(f"\n  ✦ SCARB {VERSION} — self-improving assistant")
@@ -1608,7 +1654,11 @@ def main():
         print("    ⚠  no SCARB_TOKEN set — anyone on your network can use SCARB. Set one before exposing it.")
     else:
         print("    🔒 token auth on")
-    print(f"    skills:    {len(SKILLS.skills)} loaded\n")
+    print(f"    skills:    {len(SKILLS.skills)} loaded")
+    print("    ☕ holding the Mac awake while SCARB runs. For LID-CLOSED reachability:")
+    print("       keep it on AC power + turn on Amphetamine's closed-display mode")
+    print("       (ask SCARB: \"amphetamine for the day with lid_closed\"), or run once:")
+    print("       sudo pmset -a disablesleep 1   (undo: sudo pmset -a disablesleep 0)\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

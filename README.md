@@ -69,6 +69,24 @@ same memory. Because SCARB **runs on your desktop**, asking it from your phone t
 do something on the desktop *just works*: "restart the render", "pull the repo
 and run the tests", "add a cron job" — it happens on the machine it lives on.
 
+### Keep it reachable with the lid closed
+
+A closed MacBook lid normally sleeps the machine, which drops Tailscale and makes
+SCARB unreachable. SCARB does what it can on its own — while the server runs it
+holds a `caffeinate` assertion so the Mac won't idle-sleep, and a background
+thread keeps Tailscale connected. But **lid-close sleep is a hardware trigger**,
+so for reliable reachability with the lid shut:
+
+1. **Keep it on AC power**, and turn on **Amphetamine's closed-display mode** —
+   just ask SCARB: *"start an amphetamine session for the day with lid_closed"*
+   (the amphetamine skill enables it). One-time: in Amphetamine → Preferences →
+   Sessions, allow the closed-display toggle so AppleScript can set it.
+2. Or the guaranteed way, run once in Terminal:
+   `sudo pmset -a disablesleep 1` — the Mac never sleeps, lid open or closed.
+   (Undo with `sudo pmset -a disablesleep 0`.)
+
+Then close the lid and SCARB stays reachable over Tailscale from anywhere.
+
 **Set a token before you expose it.** With a token, every client must supply it:
 
 ```bash
