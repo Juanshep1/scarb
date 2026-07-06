@@ -171,6 +171,14 @@ personal agent — and its soul tells it to **ask before anything destructive,
 irreversible, or far-reaching**. Run it on machines you own, keep a token on it,
 and read what it proposes. It's yours; it does what you tell it.
 
+## Everything it can do
+
+See **[CHANGELOG.md](CHANGELOG.md)** for the full list of features and fixes:
+in-UI model setup with per-provider keys, a live model dropdown, macOS computer
+use (real sight + real clicks), the Amphetamine keep-awake skill, Metamorphosis
+(🦋 autonomous self-improvement), voice (mic + spoken replies, free or
+ElevenLabs), conversations with persistent memory, and the native iOS app.
+
 — part of the *build-your-own-x* ecosystem alongside
 [Vanta](https://github.com/Juanshep1/vanta), [vcode](https://github.com/Juanshep1/vcode),
 and [Harbor](https://github.com/Juanshep1/harbor).

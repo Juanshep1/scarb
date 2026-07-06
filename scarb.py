@@ -765,6 +765,7 @@ SELF-IMPROVING SKILLS (do this on your own, without being asked)
 - Keep skills general and robust: handle missing/oddly-typed args, add the option the task revealed you needed, and tidy the code as you go. Growing and refining your skills is the whole point of you.
 
 RULES
+- If the human confirms something already worked, thanks you, or says stop / leave it / it's fine / that's enough / it was successful — DO NOT redo the task or call any tool. Just acknowledge in one short line. Only take a new action when they actually ask for something new or different. Re-reading the conversation, if a task already succeeded earlier, treat it as done.
 - You can ONLY affect the computer by calling a tool and getting its result back. You have NO other powers. If you have not received a tool result, the thing did NOT happen.
 - NEVER say a task is done, or report a session started / file created / app opened / state changed, unless a tool result confirmed it. Do not fabricate results. If you haven't called the tool yet, call it now instead of describing it.
 - When you lack a capability, CREATE A SKILL for it (create_skill), then call it. That is how you grow.
@@ -933,7 +934,7 @@ def convo_summaries():
     return out
 
 
-def run_turn(user_message, kind="cloud", max_steps=12):
+def run_turn(user_message, kind="cloud", max_steps=20):
     """Run one full agent turn (may take several tool steps). Streams via BUS."""
     if BUSY.is_set():
         BUS.emit("error", text="SCARB is already working on something.")
@@ -1026,17 +1027,51 @@ def run_turn(user_message, kind="cloud", max_steps=12):
 
             # --- no tool call → final answer ---
             BUS.emit("assistant", text=content)
-            with CONVO_LOCK:
-                convo = current_convo()
-                convo["messages"].append({"role": "assistant", "content": content})
-                convo["updated"] = time.time()
-                save_convos()
+            messages.append({"role": "assistant", "content": content})
+            _persist_turn(messages)
             return
 
-        BUS.emit("assistant", text="(I hit my step limit for this task — tell me to continue and I'll pick up where I left off.)")
+        # --- step limit: don't dead-end. Ask for a plain summary (no tools) so
+        # the turn closes with a real answer that is SAVED to the conversation,
+        # so a later "it worked" / "leave it" isn't answered by redoing it.
+        messages.append({"role": "user", "content":
+                         "(You've reached the step limit for this task.) Reply now in plain words "
+                         "with the outcome — what you got done and anything still left. Do NOT call any tool."})
+        try:
+            final = (openai_message(system, messages, kind, None) if native
+                     else {"content": llm_chat(system, messages, kind=kind)})
+            summary = strip_thinking(final.get("content") or "") or "I reached my step limit on this task."
+        except Exception:
+            summary = "I reached my step limit on this task — tell me to continue if there's more to do."
+        BUS.emit("assistant", text=summary)
+        messages.append({"role": "assistant", "content": summary})
+        _persist_turn(messages)
     finally:
         BUS.emit("status", text="idle")
         BUSY.clear()
+
+
+def _trim_messages(msgs, limit=300):
+    """Cap conversation length without orphaning tool_call/tool pairs."""
+    if len(msgs) <= limit:
+        return msgs
+    m = msgs[-limit:]
+    while m and (m[0].get("role") == "tool"
+                 or (m[0].get("role") == "assistant" and m[0].get("tool_calls"))
+                 or (m[0].get("role") == "user" and str(m[0].get("content", "")).startswith("TOOL RESULT"))):
+        m.pop(0)
+    return m
+
+
+def _persist_turn(messages):
+    """Save the WHOLE turn — user message, every tool call and result, and the
+    final answer — so the conversation is a true record. This is what lets a
+    follow-up like 'it worked' be understood instead of triggering a redo."""
+    with CONVO_LOCK:
+        convo = current_convo()
+        convo["messages"] = _trim_messages(list(messages))
+        convo["updated"] = time.time()
+        save_convos()
 
 
 def _short(result):

@@ -183,7 +183,7 @@ async function loadConvos() {
 async function loadConversation(id) {
   const r = await api("/api/conversation", "POST", { action: "load", id });
   stream.innerHTML = "";
-  (r.messages || []).forEach((m) => m.role === "user" ? addUser(m.content) : addScarb(m.content));
+  renderHistory(r.messages);
   BOOT_T = Date.now() / 1000;
   closeDrawer();
 }
@@ -196,6 +196,22 @@ async function newConversation() {
 }
 $("newChat").onclick = newConversation;
 $("drawerNew").onclick = newConversation;
+
+// Render a saved conversation, skipping the tool-call plumbing we now persist
+// (tool results, and assistant messages that were only tool calls).
+function renderHistory(messages) {
+  (messages || []).forEach((m) => {
+    const content = (m.content || "").toString();
+    if (m.role === "user") {
+      if (content.startsWith("TOOL RESULT:") || content.startsWith("(You've reached the step limit")) return;
+      addUser(content);
+    } else if (m.role === "assistant") {
+      if (!content.trim() || m.tool_calls) return;   // skip pure tool-call turns
+      addScarb(content);
+    }
+    // role "tool" and anything else: skip
+  });
+}
 
 function timeAgo(t) {
   if (!t) return "";
@@ -629,7 +645,7 @@ async function boot() {
     $("identityEdit").value = state.identity || "";
     $("soulEdit").value = state.soul || "";
     $("subtitle").textContent = (state.provider || "") + " · " + (state.model || "");
-    (state.history || []).forEach((m) => m.role === "user" ? addUser(m.content) : addScarb(m.content));
+    renderHistory(state.history);
     setMolt(state.molt);
     setVoiceOut(VOICE_OUT);
     BOOT_T = Date.now() / 1000;
