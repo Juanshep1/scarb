@@ -1,5 +1,5 @@
 # name: computer
-# description: See and control this Mac. ALWAYS {"action":"see"} FIRST to get the real on-screen buttons/menus/fields/links (by name, with coordinates) before clicking — don't guess. Then {"action":"click","target":"<exact or partial name>"} clicks that element's real coordinate (works on web videos & links; add "double":1 to double-click). Or {"action":"click","x":120,"y":340} for a raw point. Also: {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"type","text":"hi"}, {"action":"key","keys":"cmd+s"}, {"action":"screenshot"}. Needs macOS Accessibility permission for the app running SCARB.
+# description: Full control of this Mac's screen & mouse. {"action":"see"} FIRST to get the real on-screen buttons/menus/fields/links by name + coordinates (don't guess); {"action":"read"} reads the visible text of the front window (a web page/doc). Click: {"action":"click","target":"Save"} (real click at the element's center — works on web videos/links; "double":1 to double-click) or {"action":"click","x":120,"y":340}. Also {"action":"rightclick","x":..,"y":..}, {"action":"move","x":..,"y":..}, {"action":"drag","from":[x,y],"to":[x,y]}, {"action":"scroll","direction":"down","amount":6}, {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"window","do":"minimize|close|fullscreen|list"}, {"action":"type","text":"hi"}, {"action":"key","keys":"cmd+s"}, {"action":"clipboard"} (read), {"action":"copy","text":".."} (write), {"action":"screenshot"}. Needs macOS Accessibility permission.
 import subprocess
 import os
 import ctypes
@@ -232,10 +232,156 @@ def _screenshot(args):
         return {"ok": False, "error": str(e)}
 
 
+# ---- more mouse: move, scroll, drag, right-click ---------------------------
+
+def _cg():
+    return ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+
+
+class _CGPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+def _post_mouse(etype, x, y, button=0):
+    cg = _cg()
+    cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+    cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, _CGPoint, ctypes.c_uint32]
+    cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+    cg.CFRelease.argtypes = [ctypes.c_void_p]
+    ev = cg.CGEventCreateMouseEvent(None, etype, _CGPoint(float(x), float(y)), button)
+    cg.CGEventPost(0, ev)
+    cg.CFRelease(ev)
+
+
+def _move(args):
+    _post_mouse(5, float(args.get("x", 0)), float(args.get("y", 0)))
+    return {"ok": True, "result": f"moved to {args.get('x')},{args.get('y')}"}
+
+
+def _rightclick(args):
+    x, y = float(args.get("x", 0)), float(args.get("y", 0))
+    _post_mouse(5, x, y)
+    _post_mouse(3, x, y, 1)   # rightMouseDown
+    _post_mouse(4, x, y, 1)   # rightMouseUp
+    return {"ok": True, "result": f"right-clicked {int(x)},{int(y)}"}
+
+
+def _drag(args):
+    frm = args.get("from") or [args.get("x1"), args.get("y1")]
+    to = args.get("to") or [args.get("x2"), args.get("y2")]
+    import time
+    x1, y1 = float(frm[0]), float(frm[1])
+    x2, y2 = float(to[0]), float(to[1])
+    _post_mouse(5, x1, y1); _post_mouse(1, x1, y1)      # move, down
+    steps = 12
+    for i in range(1, steps + 1):
+        _post_mouse(6, x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps)  # leftMouseDragged
+        time.sleep(0.01)
+    _post_mouse(2, x2, y2)                               # up
+    return {"ok": True, "result": f"dragged {int(x1)},{int(y1)} -> {int(x2)},{int(y2)}"}
+
+
+def _scroll(args):
+    cg = _cg()
+    cg.CGEventCreateScrollWheelEvent.restype = ctypes.c_void_p
+    cg.CGEventCreateScrollWheelEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+                                                 ctypes.c_int32, ctypes.c_int32]
+    cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+    cg.CFRelease.argtypes = [ctypes.c_void_p]
+    dy = int(args.get("dy", 0))
+    dx = int(args.get("dx", 0))
+    direction = str(args.get("direction", "")).lower()
+    amount = int(args.get("amount", 5))
+    if direction == "down":
+        dy = -amount
+    elif direction == "up":
+        dy = amount
+    elif direction == "left":
+        dx = -amount
+    elif direction == "right":
+        dx = amount
+    ev = cg.CGEventCreateScrollWheelEvent(None, 0, 2, dy, dx)  # kCGScrollEventUnitLine=0? use pixel=0
+    cg.CGEventPost(0, ev)
+    cg.CFRelease(ev)
+    return {"ok": True, "result": f"scrolled dx={dx} dy={dy}"}
+
+
+# ---- clipboard, reading text, windows --------------------------------------
+
+def _clipboard(args):
+    try:
+        out = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=5).stdout
+        return {"ok": True, "result": out[:8000]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _copy(args):
+    text = str(args.get("text", ""))
+    try:
+        subprocess.run(["pbcopy"], input=text, text=True, timeout=5)
+        return {"ok": True, "result": f"copied {len(text)} chars to the clipboard"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _read(args):
+    """Read the visible text of the frontmost window — useful for reading a web
+    page, doc, or dialog before acting."""
+    app = _frontmost()
+    script = f'''
+    set out to ""
+    tell application "System Events" to tell process "{_q(app)}"
+      if (count of windows) > 0 then
+        repeat with el in (entire contents of window 1)
+          try
+            set r to role description of el
+            if r is in {{"static text", "text area", "text field", "link", "heading"}} then
+              set v to ""
+              try
+                set v to (value of el as string)
+              end try
+              if v is "" then
+                try
+                  set v to (name of el as string)
+                end try
+              end if
+              if v is not "" and v is not "missing value" then set out to out & v & linefeed
+            end if
+          end try
+        end repeat
+      end if
+    end tell
+    return out
+    '''
+    ok, out = _osa(script, timeout=45)
+    if not ok:
+        return {"ok": False, "error": out}
+    return {"ok": True, "result": out[:9000]}
+
+
+def _window(args):
+    do = str(args.get("do", "list")).lower()
+    app = _frontmost()
+    if do == "list":
+        ok, out = _osa(f'tell application "System Events" to tell process "{_q(app)}" to get name of windows')
+        return {"ok": ok, "result": out}
+    verb = {"minimize": 'set value of attribute "AXMinimized" of window 1 to true',
+            "close": "click button 1 of window 1",
+            "fullscreen": 'keystroke "f" using {control down, command down}'}.get(do)
+    if not verb:
+        return {"ok": False, "error": "window do: list, minimize, close, or fullscreen"}
+    ok, out = _osa(f'tell application "System Events" to tell process "{_q(app)}" to {verb}')
+    return {"ok": ok, "result": out or f"{do} done"}
+
+
 _ACTIONS = {
-    "see": _see, "look": _see, "describe": _see,
-    "click": _click, "menu": _menu, "focus": _focus, "apps": _apps,
-    "type": _type, "key": _key, "screenshot": _screenshot,
+    "see": _see, "look": _see, "describe": _see, "read": _read,
+    "click": _click, "rightclick": _rightclick, "menu": _menu,
+    "move": _move, "drag": _drag, "scroll": _scroll,
+    "focus": _focus, "apps": _apps, "window": _window,
+    "type": _type, "key": _key,
+    "clipboard": _clipboard, "copy": _copy, "screenshot": _screenshot,
 }
 
 

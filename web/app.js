@@ -68,6 +68,19 @@ function addStep(cls, kind, main, detail) {
 
 function esc(s) { const t = document.createElement("span"); t.textContent = s; return t.innerHTML; }
 
+// live screenshot in the chat, so you see exactly what SCARB is looking at
+function addShot(url) {
+  clearEmpty();
+  const wrap = document.createElement("div");
+  wrap.className = "shot";
+  const img = document.createElement("img");
+  img.src = url + (TOKEN ? "&token=" + encodeURIComponent(TOKEN) : "");
+  img.alt = "SCARB's view of the screen";
+  wrap.appendChild(img);
+  stream.appendChild(wrap);
+  if (atBottom()) scroll();
+}
+
 // ---- SSE event handling --------------------------------------------------
 function connect() {
   if (evtSource) evtSource.close();
@@ -100,7 +113,8 @@ function handle(ev) {
     case "result":
       addStep("result" + (ev.ok ? "" : " bad"), ev.ok ? "result" : "failed",
         esc(ev.tool), typeof ev.result === "string" ? ev.result : JSON.stringify(ev.result)); break;
-    case "assistant": addScarb(ev.text); speak(ev.text); break;
+    case "assistant": addScarb(ev.text); speak(ev.text, onReplyDone); break;
+    case "screenshot": addShot(ev.url); break;
     case "error": addStep("error", "error", esc(ev.text)); break;
     case "status":
       setStatus(ev.text, ev.text !== "idle");
@@ -547,17 +561,20 @@ window.scarbVoiceInput = (text) => {          // final transcript → send (nati
   autoGrow();
   if (input.value) send();
 };
-window.scarbSetListening = (on) => { listening = !!on; micBtn.classList.toggle("on", listening); };
+window.scarbSetListening = (on) => {
+  listening = !!on; micBtn.classList.toggle("on", listening);
+  // native mic went idle without a transcript, and we're in a conversation:
+  // keep listening (unless SCARB is busy replying).
+  if (!on && CONVO_MODE && !input.value.trim() && !document.body.classList.contains("busy")) {
+    setTimeout(beginListening, 300);
+  }
+};
 
 function autoGrow() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; }
 
-micBtn.onclick = () => {
-  if (nativeMic) {
-    window.webkit.messageHandlers.mic.postMessage(listening ? "stop" : "start");
-    return;
-  }
+function startWebListening() {
   if (!SR) { addStep("error", "voice", "This browser can't do speech input — try Safari or Chrome."); return; }
-  if (listening) { recog && recog.stop(); return; }
+  if (listening) return;
   recog = new SR();
   recog.lang = "en-US"; recog.interimResults = true; recog.continuous = false;
   const base = input.value ? input.value + " " : "";
@@ -566,10 +583,49 @@ micBtn.onclick = () => {
     for (let i = e.resultIndex; i < e.results.length; i++) s += e.results[i][0].transcript;
     input.value = (base + s).trimStart(); autoGrow();
   };
-  recog.onend = () => { listening = false; micBtn.classList.remove("on"); if (input.value.trim()) send(); };
+  recog.onend = () => {
+    listening = false; micBtn.classList.remove("on");
+    if (input.value.trim()) send();
+    else if (CONVO_MODE) setTimeout(beginListening, 300);   // heard nothing — keep listening
+  };
   recog.onerror = () => { listening = false; micBtn.classList.remove("on"); };
   listening = true; micBtn.classList.add("on"); recog.start();
+}
+
+micBtn.onclick = () => {
+  if (nativeMic) { window.webkit.messageHandlers.mic.postMessage(listening ? "stop" : "start"); return; }
+  if (listening) { recog && recog.stop(); return; }
+  startWebListening();
 };
+
+// ---- hands-free conversation mode ----------------------------------------
+// Tap once: SCARB listens, you talk, it auto-detects when you stop, sends,
+// speaks its reply, then listens again — a natural back-and-forth, no buttons.
+let CONVO_MODE = false;
+function setConvo(on) {
+  CONVO_MODE = on;
+  $("convoBtn").classList.toggle("on", on);
+  if (on) {
+    setVoiceOut(true);           // conversation implies spoken replies
+    beginListening();
+  } else {
+    if (listening) { if (nativeMic) window.webkit.messageHandlers.mic.postMessage("stop"); else recog && recog.stop(); }
+    stopSpeaking();
+  }
+}
+$("convoBtn").onclick = () => setConvo(!CONVO_MODE);
+
+function beginListening() {
+  if (!CONVO_MODE) return;
+  if (listening) return;
+  if (nativeMic) window.webkit.messageHandlers.mic.postMessage("start");
+  else startWebListening();
+}
+
+// after SCARB finishes speaking a reply, listen again (conversation loop)
+function onReplyDone() {
+  if (CONVO_MODE) setTimeout(beginListening, 250);
+}
 
 // ---- SCARB speaks its replies --------------------------------------------
 let VOICE_OUT = localStorage.getItem("scarb_voice") === "1";
@@ -591,10 +647,11 @@ function cleanForSpeech(t) {
     .trim().slice(0, 1200);
 }
 
-async function speak(text) {
-  if (!VOICE_OUT) return;
+async function speak(text, onDone) {
+  const done = typeof onDone === "function" ? onDone : () => {};
+  if (!VOICE_OUT) { done(); return; }
   const clean = cleanForSpeech(text);
-  if (!clean) return;
+  if (!clean) { done(); return; }
   stopSpeaking();
   // Prefer ElevenLabs (if a key is set on the server); otherwise the OS voice.
   try {
@@ -604,15 +661,18 @@ async function speak(text) {
       const buf = await res.arrayBuffer();
       const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
       currentAudio = new Audio(url);
-      currentAudio.play().catch(() => speakLocal(clean));
+      currentAudio.onended = done;
+      currentAudio.onerror = () => speakLocal(clean, done);
+      currentAudio.play().catch(() => speakLocal(clean, done));
       return;
     }
   } catch (e) { /* fall through to local voice */ }
-  speakLocal(clean);
+  speakLocal(clean, done);
 }
 
-function speakLocal(text) {
-  if (!window.speechSynthesis) return;
+function speakLocal(text, onDone) {
+  const done = typeof onDone === "function" ? onDone : () => {};
+  if (!window.speechSynthesis) { done(); return; }
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.03; u.pitch = 1.0;
   const pick = () => {
@@ -623,6 +683,7 @@ function speakLocal(text) {
   };
   const v = pick();
   if (v) u.voice = v;
+  u.onend = done; u.onerror = done;
   speechSynthesis.speak(u);
 }
 function stopSpeaking() {

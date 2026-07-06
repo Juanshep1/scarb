@@ -40,6 +40,8 @@ import urllib.error
 import urllib.parse
 import importlib.util
 import subprocess
+import select
+import html as _html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -598,19 +600,51 @@ def tool_write_file(args):
         return {"ok": False, "error": str(e)}
 
 
+class Shell:
+    """A terminal with a persistent working directory: `cd` carries over between
+    commands, like a terminal you keep open. Each command is its own bash, so
+    chain env within one command (`source venv/bin/activate && python …`)."""
+    def __init__(self):
+        self.cwd = os.path.expanduser("~")
+        self.lock = threading.Lock()
+
+    def run(self, command, timeout=120):
+        with self.lock:
+            marker = "__SCARB_CWD__"
+            script = f"{command}\n__rc=$?\nprintf '%s%s' '{marker}' \"$(pwd)\"\nexit $__rc"
+            try:
+                p = subprocess.run(["/bin/bash", "-c", script], cwd=self.cwd,
+                                   capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error": f"command still running after {timeout}s"}
+            except FileNotFoundError:
+                self.cwd = os.path.expanduser("~")
+                return {"ok": False, "error": "working directory was gone; reset to home"}
+            out = p.stdout or ""
+            new_cwd = self.cwd
+            if marker in out:
+                out, _, cwd = out.rpartition(marker)
+                new_cwd = cwd.strip() or self.cwd
+            if p.stderr:
+                out = out + p.stderr
+            if os.path.isdir(new_cwd):
+                self.cwd = new_cwd
+            return {"ok": p.returncode == 0, "exit_code": p.returncode, "cwd": self.cwd,
+                    "result": (out.strip()[-9000:]) or "(no output)"}
+
+    def reset(self):
+        self.cwd = os.path.expanduser("~")
+
+SHELL = Shell()
+
+
 def tool_run_shell(args):
     cmd = args.get("command", "")
     if not cmd:
         return {"ok": False, "error": "no command"}
-    try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                              timeout=int(args.get("timeout", 60)), cwd=HERE)
-        out = (proc.stdout + proc.stderr)[-8000:]
-        return {"ok": proc.returncode == 0, "result": out, "exit_code": proc.returncode}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "command timed out"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    if args.get("reset"):
+        SHELL.reset()
+    return SHELL.run(cmd, timeout=int(args.get("timeout", 120)))
 
 
 # ---- computer use (control the actual machine) ---------------------------
@@ -746,9 +780,15 @@ CORE TOOLS
 - list_skills {} — see what you can already do.
 - create_skill {"name","description","code"} — write a NEW skill when no skill fits. code is a full Python module (standard library only) defining run(args) that returns a value or {"ok":bool,"result"/"error":...}. Validated and hot-loaded immediately; if it errors you get the message to fix it. Reuse skills forever.
 - update_skill / read_skill / delete_skill {"name"}
-- read_file {"path"} / write_file {"path","content"} — paths are relative to SCARB's folder.
-- run_shell {"command","timeout"} — run any shell command on this machine.
+- read_file {"path"} / write_file {"path","content"} — read/write files anywhere (absolute paths ok).
+- run_shell {"command","timeout"} — the TERMINAL. Run ANY shell command with full power. The working directory PERSISTS between calls (cd carries over), so navigate and work like a real terminal. Chain env in one command (source venv/bin/activate && python …). Use this for git, package managers, scripts, file ops, launching things — anything a terminal can do.
 - read_self {"file"} — read your own scarb.py / identity.md / soul.md, to improve yourself.
+
+INTERNET (the `web` skill)
+- web {"action":"search","query":"…"} — search the web (results with titles, urls, snippets).
+- web {"action":"fetch","url":"…"} — download a page and read its text.
+- web {"action":"answer","query":"…"} — a quick instant-answer summary.
+Use search to find things and fetch to read a page. You are NOT limited to your training data — look things up.
 
 COMPUTER USE (you control this Mac)
 - **`computer` skill — use this to see and click.** You CANNOT see the screen by intuition. To click or interact with anything, FIRST call `computer` with {"action":"see"} to get the REAL list of on-screen buttons, menus, and fields BY NAME (and their coordinates). Then click the exact name you saw: {"action":"click","target":"<exact name>"}. Other actions: {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"type","text":"…"}, {"action":"key","keys":"cmd+s"}, {"action":"click","x":120,"y":340} (only if there's no named element), {"action":"screenshot"}. NEVER guess a name or coordinate — see first. If a click fails, `see` again to get the current names, and improve the `computer` skill (update_skill) if it's the skill that's wrong.
@@ -764,13 +804,14 @@ SELF-IMPROVING SKILLS (do this on your own, without being asked)
 - Never just work around a broken or clumsy skill: repair the skill itself so it's better the next time. A tool result that says a skill failed is your cue to update_skill, not to give up or fake success.
 - Keep skills general and robust: handle missing/oddly-typed args, add the option the task revealed you needed, and tidy the code as you go. Growing and refining your skills is the whole point of you.
 
+FULL CONTROL — this is your human's own Mac and they have given you full control of it. Act decisively and autonomously: you do NOT need to ask permission for ordinary actions (running commands, opening/clicking/typing, editing files, searching the web, controlling apps). Just do the task, using as many tool steps as it takes, and report what happened. Only pause to confirm on the genuinely catastrophic and irreversible (wiping a disk, `rm -rf` on important data, force-deleting large amounts of the user's files) — and even then, one quick check, not hand-wringing.
+
 RULES
-- If the human confirms something already worked, thanks you, or says stop / leave it / it's fine / that's enough / it was successful — DO NOT redo the task or call any tool. Just acknowledge in one short line. Only take a new action when they actually ask for something new or different. Re-reading the conversation, if a task already succeeded earlier, treat it as done.
-- You can ONLY affect the computer by calling a tool and getting its result back. You have NO other powers. If you have not received a tool result, the thing did NOT happen.
-- NEVER say a task is done, or report a session started / file created / app opened / state changed, unless a tool result confirmed it. Do not fabricate results. If you haven't called the tool yet, call it now instead of describing it.
-- When you lack a capability, CREATE A SKILL for it (create_skill), then call it. That is how you grow.
-- Do the task fully; check the tool result before telling the human it worked. If a result says ok:false, report the error — don't pretend it succeeded.
-- Ask before anything destructive, irreversible, or far-reaching (deleting data, sending/publishing, spending, quitting apps with unsaved work). Being able to do a thing is not permission to.
+- If the human confirms something already worked, thanks you, or says stop / leave it / it's fine / that's enough / it was successful — DO NOT redo the task or call any tool. Just acknowledge in one short line. If a task already succeeded earlier in the conversation, treat it as done.
+- You can ONLY affect the computer by calling a tool and getting its result back. If you have not received a tool result, the thing did NOT happen.
+- NEVER say a task is done, or report a click/file/command/state change, unless a tool result confirmed it. Do not fabricate results. If you haven't called the tool yet, call it now instead of describing it.
+- To click or interact with the screen, use the `computer` skill and `see` first. To run commands, use run_shell. To look things up, use the `web` skill. When you lack a capability, create a skill for it and use it.
+- Do the task fully; check each tool result. If a result says ok:false, either fix it and retry, or report the actual error — don't pretend it succeeded.
 """
 
 
@@ -960,6 +1001,11 @@ def run_turn(user_message, kind="cloud", max_steps=20):
             BUS.emit("action", tool=name, args=args or {})
             result = dispatch(name, args or {})
             BUS.emit("result", tool=name, ok=bool(result.get("ok", True)), result=_short(result))
+            # If the action produced a screenshot, show it live in the chat.
+            res = result.get("result")
+            path = res.get("path") if isinstance(res, dict) else None
+            if path and str(path).endswith(".png"):
+                BUS.emit("screenshot", url=f"/api/screen?t={int(time.time()*1000)}")
             return result
 
         def result_content(name, result):
@@ -1076,7 +1122,7 @@ def _persist_turn(messages):
 
 def _short(result):
     s = json.dumps(result.get("result", result.get("error", "")), default=str)
-    return s[:1200]
+    return s[:4000]   # show plenty so you can see what SCARB saw/did
 
 
 # ===========================================================================
@@ -1290,6 +1336,23 @@ class Handler(BaseHTTPRequestHandler):
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
             return self._send(200, {"voices": elevenlabs_voices()})
+        if path == "/api/screen":
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            shot = os.path.join(MEMORY_DIR, "screen.png")
+            try:
+                with open(shot, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception:
+                self._send(404, {"error": "no screenshot yet"})
+            return
         if path == "/api/conversations":
             if not authed(self):
                 return self._send(401, {"error": "bad token"})

@@ -74,6 +74,30 @@ resilient **connection manager**: it probes Tailscale *and* your local network,
 connects to whichever answers, and fails over automatically — so if Tailscale
 drops it still reaches your Mac. Native mic and audio built in.
 
+## Full-control upgrade (10×)
+SCARB now stands on its own as a full agent on your machine — built for use over
+Tailscale from anywhere.
+
+- **Terminal** — `run_shell` is a real terminal now: the **working directory
+  persists** between commands (`cd` carries over), so it navigates and works
+  like a terminal you keep open. Full power, any command.
+- **Computer use, expanded** — the `computer` skill gained `read` (read the
+  visible text of a window/page), `scroll`, `drag`, `rightclick`, `move`,
+  `window` (minimize/close/fullscreen/list), and `clipboard` read/write, on top
+  of see/click/menu/type/key/screenshot. Clicks are real hardware clicks that
+  work on web content.
+- **Internet** — the new `web` skill: `search` the web, `fetch` a page's text,
+  or get a quick `answer`. SCARB is no longer limited to its training data.
+- **Full control, no friction** — on your own Mac SCARB acts decisively without
+  asking permission for ordinary actions; it only pauses on the genuinely
+  catastrophic and irreversible.
+- **See everything it does** — computer-use results show much more detail in the
+  chat, and when SCARB takes a **screenshot it appears inline** so you watch what
+  it's looking at.
+- **Hands-free conversation** — a 🗣️ mode: tap once, talk, SCARB auto-detects
+  when you stop, sends, speaks its reply, and starts listening again — a natural
+  back-and-forth with no buttons, on web and in the app.
+
 ## Fixes
 - **Skills actually build** — the agent used to only parse tool actions inside
   ```` ```json ```` fences; weaker models emit bare JSON, so nothing ran and the
