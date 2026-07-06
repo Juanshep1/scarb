@@ -55,18 +55,25 @@ final class Connection: ObservableObject {
         let d = UserDefaults.standard
         self.port = d.object(forKey: "scarb.port") as? Int ?? 8787
         self.token = d.string(forKey: "scarb.token") ?? ""
+        // The MagicDNS name works anywhere over Tailscale and is stable even if
+        // the IP changes; the raw IP is a fallback; WiFi is for at-home.
+        let defaults = [
+            Host(label: "Tailscale", address: "juans-macbook-air.tailc0f840.ts.net"),
+            Host(label: "Tailscale IP", address: "100.81.53.119"),
+            Host(label: "WiFi", address: "10.0.0.189"),
+        ]
         if let data = d.data(forKey: "scarb.hosts"),
            let saved = try? JSONDecoder().decode([Host].self, from: data), !saved.isEmpty {
-            self.hosts = saved
+            // Merge: keep the user's saved routes AND guarantee the known-good
+            // defaults are present, so stale saved routes from an old install
+            // can't hide the working Tailscale route.
+            var merged = saved
+            for d0 in defaults where !merged.contains(where: { $0.address == d0.address }) {
+                merged.append(d0)
+            }
+            self.hosts = merged
         } else {
-            // Sensible starting points; the user edits these in Settings.
-            // The MagicDNS name works anywhere over Tailscale and is stable even
-            // if the IP changes; the raw IP is a fallback; WiFi is for at-home.
-            self.hosts = [
-                Host(label: "Tailscale", address: "juans-macbook-air.tailc0f840.ts.net"),
-                Host(label: "Tailscale IP", address: "100.81.53.119"),
-                Host(label: "WiFi", address: "10.0.0.189"),
-            ]
+            self.hosts = defaults
         }
     }
 

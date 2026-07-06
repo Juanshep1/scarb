@@ -1628,6 +1628,33 @@ def local_ip():
     return None
 
 
+def make_server(host, port):
+    """Serve on BOTH IPv4 and IPv6. Tailscale gives the Mac a 100.x (IPv4) and
+    an fd7a: (IPv6) address, and phones often prefer IPv6 — if we only bound
+    IPv4, an IPv6 client would hit a closed port and the app would look
+    unreachable even though Tailscale is connected."""
+    import socket
+
+    class DualStackServer(ThreadingHTTPServer):
+        address_family = socket.AF_INET6
+
+        def server_bind(self):
+            # accept both IPv6 and IPv4-mapped connections on one socket
+            try:
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except (AttributeError, OSError):
+                pass
+            super().server_bind()
+
+    try:
+        # "::" listens on all IPv6 + (with V6ONLY off) all IPv4 too
+        bind_host = "::" if host in ("0.0.0.0", "::", "") else host
+        return DualStackServer((bind_host, port), Handler)
+    except OSError:
+        # fall back to IPv4-only if dual stack isn't available
+        return ThreadingHTTPServer((host, port), Handler)
+
+
 def main():
     load_convos()
     load_evolution()
@@ -1635,7 +1662,7 @@ def main():
     ensure_tailscale()
     threading.Thread(target=molt_loop, daemon=True).start()
     threading.Thread(target=tailscale_keepalive, daemon=True).start()
-    server = ThreadingHTTPServer((CONFIG["host"], CONFIG["port"]), Handler)
+    server = make_server(CONFIG["host"], CONFIG["port"])
     port = CONFIG["port"]
     print(f"\n  ✦ SCARB {VERSION} — self-improving assistant")
     print(f"    local:     http://127.0.0.1:{port}")
