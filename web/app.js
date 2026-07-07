@@ -573,6 +573,10 @@ window.scarbSetListening = (on) => {
 function autoGrow() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; }
 
 function startWebListening() {
+  if (!window.isSecureContext) {
+    addStep("error", "voice", "The mic needs a secure (https) connection. Open SCARB at its https:// Tailscale address (shown when the server starts) — then tap 🎤 again. Or use the app.");
+    return;
+  }
   if (!SR) { addStep("error", "voice", "This browser can't do speech input — try Safari or Chrome."); return; }
   if (listening) return;
   recog = new SR();

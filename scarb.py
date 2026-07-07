@@ -1299,6 +1299,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_file("app.js", "text/javascript; charset=utf-8")
         if path == "/style.css":
             return self._serve_file("style.css", "text/css; charset=utf-8")
+        if path == "/manifest.json":
+            return self._serve_file("manifest.json", "application/manifest+json")
         if path == "/api/ping":
             # Unauthenticated: lets the UI learn whether a token is required
             # before it tries anything, so it never guesses wrong.
@@ -1608,6 +1610,26 @@ def ensure_tailscale():
         pass
 
 
+def enable_tailscale_serve(port):
+    """Expose SCARB over HTTPS on the Mac's MagicDNS name via Tailscale Serve.
+    This gives a valid TLS cert (no warnings), which browsers require before
+    they'll grant microphone access — so the mic works in Safari/Chrome, not
+    just the app. Returns the https URL, or None. Best-effort."""
+    try:
+        out = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=6)
+        name = ""
+        try:
+            name = json.loads(out.stdout).get("Self", {}).get("DNSName", "").rstrip(".")
+        except Exception:
+            pass
+        # idempotent: point https:443 at our local http port
+        subprocess.run(["tailscale", "serve", "--bg", "--https=443",
+                        f"http://127.0.0.1:{port}"], capture_output=True, text=True, timeout=15)
+        return f"https://{name}" if name else None
+    except Exception:
+        return None
+
+
 def tailscale_keepalive():
     while True:
         try:
@@ -1672,6 +1694,9 @@ def main():
     kind, msg = tailscale_state(port)
     if kind == "url":
         print(f"    tailscale: {msg}   (open this on your phone, anywhere)")
+        https = enable_tailscale_serve(port)
+        if https:
+            print(f"    🔊 https:   {https}   (use THIS in a browser — mic + install-to-home work)")
     elif kind == "login":
         print(f"    tailscale: {msg}")
     prov, model, _, key = provider_for("cloud")

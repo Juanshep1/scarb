@@ -10,3 +10,5 @@ test_projects/
 ~
 memory/screen.png
 memory/evolution.json
+*.crt
+*.key
