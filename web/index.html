@@ -32,6 +32,20 @@
 </div>
 <div class="swipe-hint" id="swipeHint">swipe up for tabs</div>
 
+<!-- full-screen screenshot viewer + live desktop view -->
+<div class="viewer" id="viewer" hidden>
+  <div class="viewer-bar">
+    <span id="viewerTitle">Screenshot</span>
+    <span class="viewer-live" id="viewerLive" hidden>● LIVE</span>
+    <span style="flex:1"></span>
+    <button class="viewer-btn" id="viewerZoom" title="Zoom">⤢</button>
+    <button class="viewer-btn" id="viewerClose" title="Close">✕</button>
+  </div>
+  <div class="viewer-stage" id="viewerStage">
+    <img id="viewerImg" src="" alt="screen">
+  </div>
+</div>
+
 <!-- conversation history drawer (opens from the scarab icon) -->
 <div class="drawer-scrim" id="drawerScrim"></div>
 <aside class="drawer" id="drawer">
@@ -61,6 +75,7 @@
         <div class="subtitle" id="subtitle">self-improving assistant</div>
       </div>
       <div class="head-right">
+        <button class="iconbtn" id="liveBtn" title="Live view of your Mac's screen">🖥️</button>
         <button class="iconbtn" id="convoBtn" title="Hands-free conversation — talk and listen back and forth">🗣️</button>
         <button class="iconbtn" id="voiceBtn" title="Read SCARB's replies aloud">🔈</button>
         <button class="iconbtn moltbtn" id="moltBtn" title="Metamorphosis — SCARB improves its own skills on its own">🦋</button>

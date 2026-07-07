@@ -82,15 +82,45 @@ function esc(s) { const t = document.createElement("span"); t.textContent = s; r
 // live screenshot in the chat, so you see exactly what SCARB is looking at
 function addShot(url) {
   clearEmpty();
+  const full = url + (TOKEN ? "&token=" + encodeURIComponent(TOKEN) : "");
   const wrap = document.createElement("div");
   wrap.className = "shot";
   const img = document.createElement("img");
-  img.src = url + (TOKEN ? "&token=" + encodeURIComponent(TOKEN) : "");
+  img.src = full;
   img.alt = "SCARB's view of the screen";
+  img.onclick = () => openViewer(full, "Screenshot");   // tap to see it up close
   wrap.appendChild(img);
   stream.appendChild(wrap);
   if (atBottom()) scroll();
 }
+
+// ---- full-screen viewer + live desktop view ------------------------------
+let liveTimer = null;
+function openViewer(src, title) {
+  stopLive();
+  $("viewerTitle").textContent = title || "Screenshot";
+  $("viewerLive").hidden = true;
+  $("viewerImg").src = src;
+  $("viewerStage").classList.remove("zoomed");
+  $("viewer").hidden = false;
+}
+function openLive() {
+  $("viewerTitle").textContent = "Your Mac";
+  $("viewerLive").hidden = false;
+  $("viewerStage").classList.remove("zoomed");
+  $("viewer").hidden = false;
+  const tick = () => {
+    $("viewerImg").src = "/api/live?t=" + Date.now() + (TOKEN ? "&token=" + encodeURIComponent(TOKEN) : "");
+  };
+  tick();
+  liveTimer = setInterval(tick, 1600);   // refresh ~every 1.6s
+}
+function stopLive() { if (liveTimer) { clearInterval(liveTimer); liveTimer = null; } }
+function closeViewer() { stopLive(); $("viewer").hidden = true; $("viewerImg").src = ""; }
+$("liveBtn").onclick = openLive;
+$("viewerClose").onclick = closeViewer;
+$("viewerZoom").onclick = () => $("viewerStage").classList.toggle("zoomed");
+$("viewerImg").onclick = () => $("viewerStage").classList.toggle("zoomed");
 
 // ---- SSE event handling --------------------------------------------------
 function connect() {

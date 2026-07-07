@@ -1395,6 +1395,27 @@ class Handler(BaseHTTPRequestHandler):
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
             return self._send(200, {"voices": elevenlabs_voices()})
+        if path == "/api/live":
+            # Grab the screen RIGHT NOW and return it — the live-view mode polls
+            # this so you can watch your Mac's screen from your phone, anywhere.
+            # Uses its own file so it never prunes the inline chat screenshots.
+            if not authed(self):
+                return self._send(401, {"error": "bad token"})
+            live = os.path.join(MEMORY_DIR, "live.png")
+            try:
+                subprocess.run(["screencapture", "-x", live], capture_output=True, timeout=12)
+                with open(live, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception:
+                self._send(404, {"error": "no screen (grant Screen Recording permission)"})
+            return
         if path == "/api/screen":
             if not authed(self):
                 return self._send(401, {"error": "bad token"})

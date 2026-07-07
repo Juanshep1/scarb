@@ -13,3 +13,4 @@ memory/evolution.json
 *.crt
 *.key
 memory/shots/
+memory/live.png
