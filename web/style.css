@@ -7,8 +7,9 @@
   --sans:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;
-  -webkit-text-size-adjust:100%;text-size-adjust:100%}
+html,body{margin:0;height:100%;width:100%;max-width:100%;overflow:hidden;overflow-x:hidden;
+  overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%;
+  touch-action:pan-y}   /* only vertical scrolling; never left/right */
 body{
   background:radial-gradient(1200px 700px at 78% -10%,#161327 0%,var(--bg) 60%);
   color:var(--ink);font-family:var(--sans);
@@ -92,8 +93,13 @@ body.molting #scarab .legs{animation:legwiggle .35s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.3}}
 
 /* ---- chat ---- */
-.stream{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
-  padding:22px 20px;display:flex;flex-direction:column;gap:14px}
+.stream{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;overscroll-behavior-x:none;
+  padding:22px 20px;display:flex;flex-direction:column;gap:14px;min-width:0}
+/* nothing may push the layout sideways: long words/URLs wrap instead */
+.msg,.step,.evolve,.shot{max-width:100%;overflow-wrap:anywhere;word-break:break-word}
+.step span,.step pre{overflow-wrap:anywhere;word-break:break-word;max-width:100%}
+.main,.side,.panel{min-width:0;overflow-x:hidden}
 .msg{max-width:760px;line-height:1.55}
 .msg.user{align-self:flex-end;background:linear-gradient(180deg,#241d3f,#1c1733);
   border:1px solid #322855;border-radius:16px 16px 4px 16px;padding:11px 15px;color:#efeaff}

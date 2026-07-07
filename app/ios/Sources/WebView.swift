@@ -23,6 +23,14 @@ struct SCARBWebView: UIViewRepresentable {
         wv.backgroundColor = UIColor(red: 0.043, green: 0.043, blue: 0.072, alpha: 1)
         wv.scrollView.backgroundColor = .clear
         wv.scrollView.bounces = false
+        wv.scrollView.bouncesZoom = false
+        wv.scrollView.alwaysBounceHorizontal = false
+        wv.scrollView.alwaysBounceVertical = false
+        wv.scrollView.showsHorizontalScrollIndicator = false
+        wv.scrollView.showsVerticalScrollIndicator = false
+        wv.scrollView.contentInsetAdjustmentBehavior = .never
+        wv.scrollView.maximumZoomScale = 1
+        wv.scrollView.minimumZoomScale = 1
         wv.allowsBackForwardNavigationGestures = false
         context.coordinator.webView = wv
         context.coordinator.load(url, into: wv)
