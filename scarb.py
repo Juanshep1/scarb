@@ -687,12 +687,18 @@ def tool_open_app(args):
 
 
 def tool_type_text(args):
-    """Type text into the frontmost app (via System Events keystroke)."""
+    """Type text into the frontmost app. Pass "enter": true to submit (press
+    Return after) — e.g. running a terminal command or a search."""
     if not _is_mac():
         return {"ok": False, "error": "typing is macOS-only"}
     text = args.get("text", "")
     safe = text.replace("\\", "\\\\").replace('"', '\\"')
-    return tool_applescript({"script": f'tell application "System Events" to keystroke "{safe}"'})
+    r = tool_applescript({"script": f'tell application "System Events" to keystroke "{safe}"'})
+    if r.get("ok") and (args.get("enter") or args.get("submit")):
+        # key code 36 = Return (the WORD "return" would just be typed)
+        tool_applescript({"script": 'tell application "System Events" to key code 36'})
+        r["result"] = f"typed and pressed Enter"
+    return r
 
 
 def tool_screenshot(args):
@@ -792,6 +798,7 @@ Use search to find things and fetch to read a page. You are NOT limited to your 
 
 COMPUTER USE (you control this Mac)
 - **`computer` skill — use this to see and click.** You CANNOT see the screen by intuition. To click or interact with anything, FIRST call `computer` with {"action":"see"} to get the REAL list of on-screen buttons, menus, and fields BY NAME (and their coordinates). Then click the exact name you saw: {"action":"click","target":"<exact name>"}. Other actions: {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"type","text":"…"}, {"action":"key","keys":"cmd+s"}, {"action":"click","x":120,"y":340} (only if there's no named element), {"action":"screenshot"}. NEVER guess a name or coordinate — see first. If a click fails, `see` again to get the current names, and improve the `computer` skill (update_skill) if it's the skill that's wrong.
+- To SUBMIT after typing (run a terminal command, send a search/message), type with "enter":true — {"tool":"computer","args":{"action":"type","text":"ls -la","enter":true}} — or press the key: {"action":"key","keys":"enter"}. NEVER type the word "enter"; that just types letters. (After you type, a screenshot of the screen is shown in the chat automatically.)
 - applescript {"script"} — raw AppleScript, for anything the `computer` skill doesn't cover.
 - open_app {"name"} or {"url"} — launch an app or open a URL/file.
 - type_text {"text"} / screenshot {} — lower-level helpers.
@@ -977,6 +984,44 @@ def convo_summaries():
     return out
 
 
+SHOTS_DIR = os.path.join(MEMORY_DIR, "shots")
+
+# Tools/actions that change what's on screen — after these, auto-capture a
+# screenshot so you SEE what got opened / typed / clicked / searched.
+_VISUAL_COMPUTER = {"click", "rightclick", "menu", "move", "drag", "scroll",
+                    "focus", "type", "key", "press", "window"}
+
+
+def _is_visual_action(tool, args):
+    if tool in ("open_app", "type_text", "applescript"):
+        return True
+    if tool == "computer":
+        return str((args or {}).get("action", "")).lower() in _VISUAL_COMPUTER
+    return False
+
+
+def capture_screen():
+    """Grab the screen to a uniquely-named file; returns its id (or None). Keeps
+    the last ~20 so each inline chat screenshot stays correct."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        os.makedirs(SHOTS_DIR, exist_ok=True)
+        tag = str(int(time.time() * 1000))
+        path = os.path.join(SHOTS_DIR, tag + ".png")
+        subprocess.run(["screencapture", "-x", path], capture_output=True, timeout=12)
+        if not os.path.exists(path):
+            return None
+        for old in sorted(os.listdir(SHOTS_DIR))[:-20]:
+            try:
+                os.remove(os.path.join(SHOTS_DIR, old))
+            except Exception:
+                pass
+        return tag
+    except Exception:
+        return None
+
+
 def run_turn(user_message, kind="cloud", max_steps=20):
     """Run one full agent turn (may take several tool steps). Streams via BUS."""
     if BUSY.is_set():
@@ -1004,11 +1049,15 @@ def run_turn(user_message, kind="cloud", max_steps=20):
             BUS.emit("action", tool=name, args=args or {})
             result = dispatch(name, args or {})
             BUS.emit("result", tool=name, ok=bool(result.get("ok", True)), result=_short(result))
-            # If the action produced a screenshot, show it live in the chat.
+            # Show the desktop live: if the action changed the screen (or took a
+            # screenshot itself), capture it and drop it inline in the chat so you
+            # see exactly what got opened / typed / clicked / searched.
             res = result.get("result")
-            path = res.get("path") if isinstance(res, dict) else None
-            if path and str(path).endswith(".png"):
-                BUS.emit("screenshot", url=f"/api/screen?t={int(time.time()*1000)}")
+            explicit = isinstance(res, dict) and str(res.get("path", "")).endswith(".png")
+            if (explicit or _is_visual_action(name, args)) and result.get("ok", True):
+                tag = capture_screen()
+                if tag:
+                    BUS.emit("screenshot", url=f"/api/screen?id={tag}")
             return result
 
         def result_content(name, result):
@@ -1349,7 +1398,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/screen":
             if not authed(self):
                 return self._send(401, {"error": "bad token"})
-            shot = os.path.join(MEMORY_DIR, "screen.png")
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            sid = (qs.get("id", [""])[0])
+            if sid and sid.isdigit():
+                shot = os.path.join(SHOTS_DIR, sid + ".png")
+            else:
+                shot = os.path.join(MEMORY_DIR, "screen.png")
             try:
                 with open(shot, "rb") as f:
                     data = f.read()

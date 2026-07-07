@@ -1,5 +1,5 @@
 # name: computer
-# description: Full control of this Mac's screen & mouse. {"action":"see"} FIRST to get the real on-screen buttons/menus/fields/links by name + coordinates (don't guess); {"action":"read"} reads the visible text of the front window (a web page/doc). Click: {"action":"click","target":"Save"} (real click at the element's center — works on web videos/links; "double":1 to double-click) or {"action":"click","x":120,"y":340}. Also {"action":"rightclick","x":..,"y":..}, {"action":"move","x":..,"y":..}, {"action":"drag","from":[x,y],"to":[x,y]}, {"action":"scroll","direction":"down","amount":6}, {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"window","do":"minimize|close|fullscreen|list"}, {"action":"type","text":"hi"}, {"action":"key","keys":"cmd+s"}, {"action":"clipboard"} (read), {"action":"copy","text":".."} (write), {"action":"screenshot"}. Needs macOS Accessibility permission.
+# description: Full control of this Mac's screen & mouse. {"action":"see"} FIRST to get the real on-screen buttons/menus/fields/links by name + coordinates (don't guess); {"action":"read"} reads the visible text of the front window (a web page/doc). Click: {"action":"click","target":"Save"} (real click at the element's center — works on web videos/links; "double":1 to double-click) or {"action":"click","x":120,"y":340}. Also {"action":"rightclick","x":..,"y":..}, {"action":"move","x":..,"y":..}, {"action":"drag","from":[x,y],"to":[x,y]}, {"action":"scroll","direction":"down","amount":6}, {"action":"menu","path":["File","New Window"]}, {"action":"focus","app":"Safari"}, {"action":"apps"}, {"action":"window","do":"minimize|close|fullscreen|list"}, {"action":"type","text":"hi"} — to type AND submit (terminal command, search, message) use {"action":"type","text":"ls -la","enter":true}. To press a key: {"action":"key","keys":"enter"} (or "return"/"tab"/"escape"/"cmd+s"/arrows) — this actually presses the key; {"action":"enter"} is a shortcut for Return. {"action":"clipboard"} (read), {"action":"copy","text":".."} (write), {"action":"screenshot"}. Needs macOS Accessibility permission.
 import subprocess
 import os
 import ctypes
@@ -197,27 +197,65 @@ def _apps(args):
     return {"ok": True, "result": [a.strip() for a in out.split(",")]}
 
 
-def _type(args):
-    text = str(args.get("text", ""))
-    ok, out = _osa(f'tell application "System Events" to keystroke "{_q(text)}"')
-    return ({"ok": True, "result": f"typed {len(text)} chars"} if ok else {"ok": False, "error": out})
-
+# Special keys must be sent as key CODES — `keystroke "return"` types the WORD
+# "return", it does NOT press the Return/Enter key. This map fixes that.
+_KEY_CODES = {
+    "return": 36, "enter": 36, "tab": 48, "space": 49, "spacebar": 49,
+    "delete": 51, "backspace": 51, "forwarddelete": 117, "escape": 53, "esc": 53,
+    "up": 126, "down": 125, "left": 123, "right": 124,
+    "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
+    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98,
+    "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+}
 
 _MODS = {"cmd": "command down", "command": "command down", "ctrl": "control down",
          "control": "control down", "alt": "option down", "option": "option down",
          "shift": "shift down", "fn": "function down"}
 
 
-def _key(args):
-    combo = str(args.get("keys", "")).strip().lower()
+def _press(combo):
+    """Press a key combo. Uses `key code` for named keys (Return/Tab/arrows/…)
+    so Enter actually SUBMITS instead of typing the word."""
+    combo = str(combo).strip().lower()
     if not combo:
-        return {"ok": False, "error": "key needs e.g. 'cmd+s'"}
+        return False, "no key"
     parts = [p.strip() for p in combo.split("+")]
     mods = [_MODS[p] for p in parts[:-1] if p in _MODS]
     key = parts[-1]
     using = (" using {" + ", ".join(mods) + "}") if mods else ""
-    ok, out = _osa(f'tell application "System Events" to keystroke "{_q(key)}"{using}')
+    if key in _KEY_CODES:
+        return _osa(f'tell application "System Events" to key code {_KEY_CODES[key]}{using}')
+    return _osa(f'tell application "System Events" to keystroke "{_q(key)}"{using}')
+
+
+def _type(args):
+    text = str(args.get("text", ""))
+    ok, out = _osa(f'tell application "System Events" to keystroke "{_q(text)}"')
+    if not ok:
+        return {"ok": False, "error": out}
+    # {"action":"type","text":"...","enter":true} types THEN presses Return —
+    # so it actually submits in a terminal, search box, chat, etc.
+    if args.get("enter") or args.get("submit") or args.get("press_enter"):
+        import time
+        time.sleep(0.05)
+        eok, eout = _press("return")
+        if not eok:
+            return {"ok": False, "error": "typed, but Enter failed: " + eout}
+        return {"ok": True, "result": f"typed {len(text)} chars and pressed Enter"}
+    return {"ok": True, "result": f"typed {len(text)} chars"}
+
+
+def _key(args):
+    combo = args.get("keys") or args.get("key") or ""
+    if not combo:
+        return {"ok": False, "error": "key needs e.g. 'enter', 'cmd+s', 'tab', 'escape'"}
+    ok, out = _press(combo)
     return ({"ok": True, "result": f"pressed {combo}"} if ok else {"ok": False, "error": out})
+
+
+def _enter(args):
+    ok, out = _press("return")
+    return ({"ok": True, "result": "pressed Enter"} if ok else {"ok": False, "error": out})
 
 
 def _screenshot(args):
@@ -380,7 +418,7 @@ _ACTIONS = {
     "click": _click, "rightclick": _rightclick, "menu": _menu,
     "move": _move, "drag": _drag, "scroll": _scroll,
     "focus": _focus, "apps": _apps, "window": _window,
-    "type": _type, "key": _key,
+    "type": _type, "key": _key, "press": _key, "enter": _enter, "return": _enter,
     "clipboard": _clipboard, "copy": _copy, "screenshot": _screenshot,
 }
 
