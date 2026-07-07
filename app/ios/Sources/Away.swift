@@ -62,7 +62,23 @@ final class Away: ObservableObject {
     You are SCARB, in away mode. You're on your human's phone, away from their Mac, so right now you CANNOT run commands, control the computer, use the terminal, or use your Mac skills — those live on the Mac and return when it's reachable. But you DO have the internet: call the web_search tool to look things up, check current facts, prices, news, docs — anything you're unsure of or that may have changed. Don't guess when you can search. You can also think, plan, brainstorm, and remember within this chat. Be warm, brief, and honest. If they ask for something that needs the computer, say it needs the Mac and offer to draft it for when you're reconnected.
     """
 
+    private var currentTask: Task<Void, Never>?
+
     func reset() { messages = []; error = nil }
+
+    func stop() {
+        currentTask?.cancel()
+        currentTask = nil
+        busy = false
+    }
+
+    static func cleanMarkdown(_ t: String) -> String {
+        var s = t.replacingOccurrences(of: "```", with: "")
+        s = s.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+        s = s.replacingOccurrences(of: "*", with: "")
+        s = s.replacingOccurrences(of: "^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     func send(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,13 +87,17 @@ final class Away: ObservableObject {
         guard configured else { error = "Add a cloud API key in Settings to use SCARB away from your Mac."; return }
         busy = true; error = nil
         let history = messages
-        Task {
-            defer { busy = false }
+        currentTask = Task {
+            defer { busy = false; currentTask = nil }
             do {
                 let reply = try await complete(history)
-                messages.append(AwayMsg(role: .scarb, text: reply))
-                onReply?(reply)
+                if Task.isCancelled { return }
+                let clean = Away.cleanMarkdown(reply)
+                messages.append(AwayMsg(role: .scarb, text: clean))
+                onReply?(clean)
             } catch {
+                if Task.isCancelled { return }
+                if let u = error as? URLError, u.code == .cancelled { return }
                 self.error = (error as? AwayError)?.message ?? error.localizedDescription
             }
         }

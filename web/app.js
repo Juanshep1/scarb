@@ -44,12 +44,23 @@ function addUser(text) {
   stream.appendChild(d); scroll();
 }
 
+// Strip leftover markdown so replies read as clean text (no *, #, backticks).
+function cleanMarkdown(t) {
+  return (t || "")
+    .replace(/```(\w+)?\n?/g, "").replace(/```/g, "")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*/g, "").replace(/\*/g, "")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s*[-•]\s+/gm, "— ")
+    .trim();
+}
+
 function addScarb(text) {
   clearEmpty();
   const d = document.createElement("div");
   d.className = "msg scarb";
   const who = document.createElement("div"); who.className = "who"; who.textContent = "SCARB";
-  const body = document.createElement("div"); body.textContent = text;
+  const body = document.createElement("div"); body.textContent = cleanMarkdown(text);
   d.appendChild(who); d.appendChild(body);
   stream.appendChild(d); if (atBottom()) scroll();
 }
@@ -166,8 +177,14 @@ function setStatus(text, busy) {
   $("statusText").textContent = text;
   $("statusBadge").classList.toggle("busy", !!busy);
   document.body.classList.toggle("busy", !!busy);   // drives the scarab animation
-  $("send").disabled = !!busy && text !== "reconnecting…";
+  const working = !!busy && text !== "reconnecting…";
+  $("send").hidden = working;                        // swap Send ↔ Stop while working
+  $("stop").hidden = !working;
 }
+$("stop").onclick = async () => {
+  stopSpeaking();
+  try { await api("/api/stop", "POST", {}); } catch (e) {}
+};
 
 // ---- conversation history drawer -----------------------------------------
 function openDrawer() { loadConvos(); $("drawer").classList.add("open"); $("drawerScrim").classList.add("open"); }

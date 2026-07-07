@@ -129,6 +129,9 @@ body.molting #scarab .legs{animation:legwiggle .35s ease-in-out infinite}
 .mic:hover{border-color:var(--gold-dim)}
 .mic.on{color:#fff;background:linear-gradient(180deg,#e0556a,#b23048);border-color:transparent;
   animation:micpulse 1.1s ease-in-out infinite}
+.stop{width:46px;height:46px;flex:none;border:none;border-radius:14px;font-size:16px;font-weight:800;
+  background:linear-gradient(180deg,#e0556a,#b23048);color:#fff}
+.stop[hidden]{display:none}
 @keyframes micpulse{50%{box-shadow:0 0 0 6px rgba(224,85,106,.22)}}
 .voiceBtn.on,#voiceBtn.on{color:var(--gold);border-color:var(--gold-dim)}
 #convoBtn.on{color:#fff;border-color:transparent;background:linear-gradient(180deg,#4fd6a0,#2f9e78);

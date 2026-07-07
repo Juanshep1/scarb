@@ -807,6 +807,7 @@ SELF-IMPROVING SKILLS (do this on your own, without being asked)
 FULL CONTROL — this is your human's own Mac and they have given you full control of it. Act decisively and autonomously: you do NOT need to ask permission for ordinary actions (running commands, opening/clicking/typing, editing files, searching the web, controlling apps). Just do the task, using as many tool steps as it takes, and report what happened. Only pause to confirm on the genuinely catastrophic and irreversible (wiping a disk, `rm -rf` on important data, force-deleting large amounts of the user's files) — and even then, one quick check, not hand-wringing.
 
 RULES
+- Write replies in PLAIN TEXT. No markdown: no ** for bold, no * for italics, no # headings, no backticks. Just clean sentences; for a list use short lines starting with a dash. Keep it readable and conversational.
 - If the human confirms something already worked, thanks you, or says stop / leave it / it's fine / that's enough / it was successful — DO NOT redo the task or call any tool. Just acknowledge in one short line. If a task already succeeded earlier in the conversation, treat it as done.
 - You can ONLY affect the computer by calling a tool and getting its result back. If you have not received a tool result, the thing did NOT happen.
 - NEVER say a task is done, or report a click/file/command/state change, unless a tool result confirmed it. Do not fabricate results. If you haven't called the tool yet, call it now instead of describing it.
@@ -900,6 +901,7 @@ CONVOS = []            # list of {id, title, created, updated, messages:[...]}
 CURRENT_ID = [None]    # boxed so helpers can rebind it
 CONVO_LOCK = threading.Lock()
 BUSY = threading.Event()
+CANCEL = threading.Event()   # set by /api/stop to halt the current turn
 CONVOS_PATH = os.path.join(MEMORY_DIR, "conversations.json")
 LEGACY_HISTORY = os.path.join(MEMORY_DIR, "history.json")
 
@@ -981,6 +983,7 @@ def run_turn(user_message, kind="cloud", max_steps=20):
         BUS.emit("error", text="SCARB is already working on something.")
         return
     BUSY.set()
+    CANCEL.clear()
     try:
         with CONVO_LOCK:
             convo = current_convo()
@@ -1019,6 +1022,11 @@ def run_turn(user_message, kind="cloud", max_steps=20):
             return body
 
         for step in range(max_steps):
+            if CANCEL.is_set():
+                BUS.emit("assistant", text="(stopped)")
+                messages.append({"role": "assistant", "content": "(stopped by you)"})
+                _persist_turn(messages)
+                return
             # --- get one model turn (with the local fallback) ---
             try:
                 if native:
@@ -1413,6 +1421,10 @@ class Handler(BaseHTTPRequestHandler):
             if not message:
                 return self._send(400, {"error": "empty message"})
             threading.Thread(target=run_turn, args=(message, kind), daemon=True).start()
+            return self._send(200, {"ok": True})
+        if path == "/api/stop":
+            CANCEL.set()
+            BUS.emit("status", text="idle")
             return self._send(200, {"ok": True})
         if path == "/api/tts":
             # Speak text with ElevenLabs if a key is set; else 204 → the client

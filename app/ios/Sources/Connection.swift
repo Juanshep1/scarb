@@ -58,6 +58,9 @@ final class Connection: ObservableObject {
         // The MagicDNS name works anywhere over Tailscale and is stable even if
         // the IP changes; the raw IP is a fallback; WiFi is for at-home.
         let defaults = [
+            // The HTTPS Tailscale Serve endpoint (:443) is the best route — valid
+            // TLS, works from anywhere, and secure — so it's tried first.
+            Host(label: "Tailscale HTTPS", address: "https://juans-macbook-air.tailc0f840.ts.net"),
             Host(label: "Tailscale", address: "juans-macbook-air.tailc0f840.ts.net"),
             Host(label: "Tailscale IP", address: "100.81.53.119"),
             Host(label: "WiFi", address: "10.0.0.189"),
@@ -100,7 +103,12 @@ final class Connection: ObservableObject {
     }
 
     func urlFor(_ host: Host) -> URL? {
-        URL(string: "http://\(host.address):\(port)")
+        let a = host.address.trimmingCharacters(in: .whitespaces)
+        if a.isEmpty { return nil }
+        // A full URL (e.g. the HTTPS Tailscale Serve endpoint on :443) is used
+        // as-is; a bare address gets the default http://host:port.
+        if a.hasPrefix("http://") || a.hasPrefix("https://") { return URL(string: a) }
+        return URL(string: "http://\(a):\(port)")
     }
 
     // Probe every host in parallel; connect to the first that responds.

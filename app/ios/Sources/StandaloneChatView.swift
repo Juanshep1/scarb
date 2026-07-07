@@ -138,12 +138,21 @@ struct StandaloneChatView: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Palette.panel, in: RoundedRectangle(cornerRadius: 18))
                 .foregroundStyle(Palette.ink)
-            Button {
-                let t = input; input = ""; away.send(t)
-            } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
-                    .foregroundStyle(Palette.gold)
-            }.disabled(away.busy)
+            if away.busy {
+                Button {
+                    away.stop(); voice.stopSpeaking()
+                } label: {
+                    Image(systemName: "stop.circle.fill").font(.system(size: 30))
+                        .foregroundStyle(Palette.red)
+                }
+            } else {
+                Button {
+                    let t = input; input = ""; away.send(t)
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
+                        .foregroundStyle(Palette.gold)
+                }
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Palette.panel.opacity(0.6))
@@ -163,6 +172,7 @@ final class VoiceBox: ObservableObject {
         input.onFinal = { [weak self] text in self?.onFinal?(text) }
     }
     func toggle() { input.toggle() }
+    func stopSpeaking() { synth.stopSpeaking(at: .immediate) }
     func speak(_ text: String) {
         let clean = text.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "#", with: "")
         let u = AVSpeechUtterance(string: String(clean.prefix(1200)))
